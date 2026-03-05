@@ -17,28 +17,57 @@ const pool = new Pool({
  * This maintains compatibility with your existing code logic.
  */
 const dbAsync = {
-  run: async (sql, params = []) => {
-    // Basic conversion of ? to $1, $2 for PG compatibility
+  // Internal function to fix the SQL string
+  prepareSql: (sql) => {
     let i = 1;
-    const pgSql = sql.replace(/\?/g, () => `$${i++}`); 
-    const res = await pool.query(pgSql, params);
+    let fixedSql = sql
+      // 1. Convert ? to $1, $2, $3...
+      .replace(/\?/g, () => `$${i++}`)
+      // 2. Convert SQLite date functions to Postgres
+      .replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP')
+      .replace(/date\('now'\)/gi, 'CURRENT_DATE')
+      // 3. Fix common CamelCase columns that require quotes in Postgres
+      .replace(/\buserId\b/g, '"userId"')
+      .replace(/\baccountId\b/g, '"accountId"')
+      .replace(/\bfirstName\b/g, '"firstName"')
+      .replace(/\blastName\b/g, '"lastName"')
+      .replace(/\bcreatedAt\b/g, '"createdAt"')
+      .replace(/\bupdatedAt\b/g, '"updatedAt"')
+      .replace(/\bisVerified\b/g, '"isVerified"')
+      .replace(/\bisActive\b/g, '"isActive"')
+      .replace(/\blastLogin\b/g, '"lastLogin"')
+      .replace(/\baccountNumber\b/g, '"accountNumber"')
+      .replace(/\baccountType\b/g, '"accountType"')
+      .replace(/\bopenedDate\b/g, '"openedDate"')
+      .replace(/\bdailyLimit\b/g, '"dailyLimit"');
+
+    return fixedSql;
+  },
+
+  run: async (sql, params = []) => {
+    const processedSql = dbAsync.prepareSql(sql);
+    // Add RETURNING id if it's an INSERT so we get the ID back like SQLite does
+    const finalSql = processedSql.trim().toUpperCase().startsWith('INSERT') 
+      ? `${processedSql} RETURNING id` 
+      : processedSql;
+      
+    const res = await pool.query(finalSql, params);
     return { id: res.rows[0]?.id || null, changes: res.rowCount };
   },
-  
+
   get: async (sql, params = []) => {
-    let i = 1;
-    const pgSql = sql.replace(/\?/g, () => `$${i++}`);
-    const res = await pool.query(pgSql, params);
+    const processedSql = dbAsync.prepareSql(sql);
+    const res = await pool.query(processedSql, params);
     return res.rows[0];
   },
-  
+
   all: async (sql, params = []) => {
-    let i = 1;
-    const pgSql = sql.replace(/\?/g, () => `$${i++}`);
-    const res = await pool.query(pgSql, params);
+    const processedSql = dbAsync.prepareSql(sql);
+    const res = await pool.query(processedSql, params);
     return res.rows;
   }
 };
+
 
 const initDatabase = async () => {
   try {
