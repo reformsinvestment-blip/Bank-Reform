@@ -5,13 +5,14 @@ const { dbAsync } = require('../database/db');
 
 const router = express.Router();
 
-// Get all accounts for current user
+// 1. Get all accounts for current user
 router.get('/', authenticate, async (req, res) => {
   try {
+    // FIX: Using $1 and quotes for "userId"
     const accounts = await dbAsync.all(`
       SELECT * FROM accounts 
-      WHERE userId = ? 
-      ORDER BY createdAt DESC
+      WHERE "userId" = $1 
+      ORDER BY "openedDate" DESC
     `, [req.user.id]);
 
     res.json({
@@ -23,17 +24,18 @@ router.get('/', authenticate, async (req, res) => {
     console.error('Get accounts error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching accounts'
+      message: 'Error fetching accounts: ' + error.message
     });
   }
 });
 
-// Get single account
+// 2. Get single account
 router.get('/:id', authenticate, async (req, res) => {
   try {
+    // FIX: Using $1, $2 and quotes for "userId"
     const account = await dbAsync.get(`
       SELECT * FROM accounts 
-      WHERE id = ? AND userId = ?
+      WHERE id = $1 AND "userId" = $2
     `, [req.params.id, req.user.id]);
 
     if (!account) {
@@ -43,10 +45,10 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    // Get recent transactions for this account
+    // FIX: Using $1 and quotes for "accountId"
     const transactions = await dbAsync.all(`
       SELECT * FROM transactions 
-      WHERE accountId = ? 
+      WHERE "accountId" = $1 
       ORDER BY date DESC 
       LIMIT 10
     `, [req.params.id]);
@@ -65,7 +67,7 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Create new account
+// 3. Create new account
 router.post('/', authenticate, async (req, res) => {
   try {
     const { accountType, currency = 'USD' } = req.body;
@@ -84,12 +86,13 @@ router.post('/', authenticate, async (req, res) => {
     let interestRate = null;
     if (accountType === 'savings') interestRate = 3.5;
 
+    // FIX: Full PostgreSQL INSERT syntax with quotes
     await dbAsync.run(`
-      INSERT INTO accounts (id, userId, accountNumber, accountType, balance, currency, interestRate, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO accounts (id, "userId", "accountNumber", "accountType", balance, currency, "interestRate", status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `, [accountId, req.user.id, accountNumber, accountType, 0, currency, interestRate, 'active']);
 
-    const account = await dbAsync.get('SELECT * FROM accounts WHERE id = ?', [accountId]);
+    const account = await dbAsync.get('SELECT * FROM accounts WHERE id = $1', [accountId]);
 
     res.status(201).json({
       success: true,
@@ -106,13 +109,14 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
-// Get account balance
+// 4. Get account balance
 router.get('/:id/balance', authenticate, async (req, res) => {
   try {
+    // FIX: Quotes for "accountNumber", "accountType", "userId"
     const account = await dbAsync.get(`
-      SELECT id, accountNumber, balance, currency, accountType 
+      SELECT id, "accountNumber", balance, currency, "accountType" 
       FROM accounts 
-      WHERE id = ? AND userId = ?
+      WHERE id = $1 AND "userId" = $2
     `, [req.params.id, req.user.id]);
 
     if (!account) {
@@ -136,14 +140,14 @@ router.get('/:id/balance', authenticate, async (req, res) => {
   }
 });
 
-// Get account statistics
+// 5. Get account statistics
 router.get('/:id/stats', authenticate, async (req, res) => {
   try {
-    const { period = '30' } = req.query; // days
+    const { period = '30' } = req.query;
 
     const account = await dbAsync.get(`
       SELECT * FROM accounts 
-      WHERE id = ? AND userId = ?
+      WHERE id = $1 AND "userId" = $2
     `, [req.params.id, req.user.id]);
 
     if (!account) {
@@ -156,21 +160,21 @@ router.get('/:id/stats', authenticate, async (req, res) => {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(period));
 
-    // Get income and expenses
+    // FIX: Using $1, $2 and quotes for "accountId"
     const stats = await dbAsync.get(`
       SELECT 
-        SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as totalIncome,
-        SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as totalExpenses,
-        COUNT(*) as transactionCount
+        SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as "totalIncome",
+        SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as "totalExpenses",
+        COUNT(*) as "transactionCount"
       FROM transactions 
-      WHERE accountId = ? AND date >= ?
+      WHERE "accountId" = $1 AND date >= $2
     `, [req.params.id, startDate.toISOString()]);
 
-    // Get transactions by category
+    // FIX: Quotes for "accountId"
     const categories = await dbAsync.all(`
       SELECT category, SUM(ABS(amount)) as total
       FROM transactions 
-      WHERE accountId = ? AND date >= ? AND category IS NOT NULL
+      WHERE "accountId" = $1 AND date >= $2 AND category IS NOT NULL
       GROUP BY category
       ORDER BY total DESC
     `, [req.params.id, startDate.toISOString()]);
