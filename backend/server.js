@@ -52,6 +52,7 @@ const allowedOrigins = [
   'https://bank-reform.vercel.app',  // production frontend
   'https://bifrc.org',               // Your main domain
   'https://www.bifrc.org', 
+  'https://bifrc-api.onrender.com'
 ];
 
 app.use(
