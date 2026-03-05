@@ -17,40 +17,42 @@ const pool = new Pool({
  * This maintains compatibility with your existing code logic.
  */
 const dbAsync = {
-  // Internal function to fix the SQL string
   prepareSql: (sql) => {
     let i = 1;
-    let fixedSql = sql
-      // 1. Convert ? to $1, $2, $3...
-      .replace(/\?/g, () => `$${i++}`)
-      // 2. Convert SQLite date functions to Postgres
-      .replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP')
-      .replace(/date\('now'\)/gi, 'CURRENT_DATE')
-      // 3. Fix common CamelCase columns that require quotes in Postgres
-      .replace(/\buserId\b/g, '"userId"')
-      .replace(/\baccountId\b/g, '"accountId"')
-      .replace(/\bfirstName\b/g, '"firstName"')
-      .replace(/\blastName\b/g, '"lastName"')
-      .replace(/\bcreatedAt\b/g, '"createdAt"')
-      .replace(/\bupdatedAt\b/g, '"updatedAt"')
-      .replace(/\bisVerified\b/g, '"isVerified"')
-      .replace(/\bisActive\b/g, '"isActive"')
-      .replace(/\blastLogin\b/g, '"lastLogin"')
-      .replace(/\baccountNumber\b/g, '"accountNumber"')
-      .replace(/\baccountType\b/g, '"accountType"')
-      .replace(/\bopenedDate\b/g, '"openedDate"')
-      .replace(/\bdailyLimit\b/g, '"dailyLimit"');
+    let fixedSql = sql;
+
+    // 1. Only convert ? to $1, $2 if "?" actually exists in the string
+    if (fixedSql.includes('?')) {
+      fixedSql = fixedSql.replace(/\?/g, () => `$${i++}`);
+    }
+
+    // 2. Convert SQLite dates to Postgres
+    fixedSql = fixedSql.replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP')
+                       .replace(/date\('now'\)/gi, 'CURRENT_DATE');
+
+    // 3. SAFE QUOTING: Only add quotes if the word is NOT already quoted
+    const columns = [
+      'userId', 'accountId', 'firstName', 'lastName', 'createdAt', 'updatedAt',
+      'isVerified', 'isActive', 'lastLogin', 'accountNumber', 'accountType',
+      'openedDate', 'dailyLimit', 'currentDailySpend'
+    ];
+
+    columns.forEach(col => {
+      // This regex looks for the column name but makes sure it doesn't have a " before it
+      const regex = new RegExp(`(?<!")\\b${col}\\b(?!")`, 'g');
+      fixedSql = fixedSql.replace(regex, `"${col}"`);
+    });
 
     return fixedSql;
   },
 
   run: async (sql, params = []) => {
     const processedSql = dbAsync.prepareSql(sql);
-    // Add RETURNING id if it's an INSERT so we get the ID back like SQLite does
-    const finalSql = processedSql.trim().toUpperCase().startsWith('INSERT') 
-      ? `${processedSql} RETURNING id` 
-      : processedSql;
-      
+    // Only add RETURNING id if it's an INSERT and doesn't already have a RETURNING clause
+    let finalSql = processedSql;
+    if (processedSql.trim().toUpperCase().startsWith('INSERT') && !processedSql.toUpperCase().includes('RETURNING')) {
+      finalSql = `${processedSql} RETURNING id`;
+    }
     const res = await pool.query(finalSql, params);
     return { id: res.rows[0]?.id || null, changes: res.rowCount };
   },
