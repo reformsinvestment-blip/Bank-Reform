@@ -50,7 +50,6 @@ app.use(
 const allowedOrigins = [
   'http://localhost:5173',           // local development
   'https://bank-reform.vercel.app',  // production frontend
-  'https://bifrc.netlify.app'  ,     // production frontend
   'https://bifrc.org',               // Your main domain
   'https://www.bifrc.org', 
 ];
