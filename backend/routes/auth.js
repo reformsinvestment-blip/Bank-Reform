@@ -79,64 +79,36 @@ router.post('/register', [
 });
 
 // Login
+// LOGIN ROUTE
 router.post('/login', [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
-  body('password').notEmpty().withMessage('Password is required')
+  body('email').isEmail().normalizeEmail(),
+  body('password').notEmpty()
 ], async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        errors: errors.array()
-      });
-    }
-
     const { email, password } = req.body;
 
-    // Find user
-    const user = await dbAsync.get('SELECT * FROM users WHERE email = ?', [email]);
+    // Fix 1: Use $1 for Postgres
+    const user = await dbAsync.get('SELECT * FROM users WHERE email = $1', [email]);
+    
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    // Check password
+    // Fix 2: Check password (user.password is the hash from DB)
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    // Check if account is active
-    if (!user.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: 'Account is deactivated'
-      });
+    // Fix 3: PostgreSQL returns actual booleans
+    if (user.isActive === false) {
+      return res.status(401).json({ success: false, message: 'Account is deactivated' });
     }
 
-    // Update last login
-    await dbAsync.run('UPDATE users SET lastLogin = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
+    // Fix 4: Update "lastLogin" with quotes and $1
+    await dbAsync.run('UPDATE users SET "lastLogin" = CURRENT_TIMESTAMP WHERE id = $1', [user.id]);
 
-    // Generate token
     const token = generateToken(user);
-
-    // Send login notification email
-    await sendEmail({
-      to: email,
-      subject: 'New Login to Your SecureBank Account',
-      template: 'loginNotification',
-      data: {
-        firstName: user.firstName,
-        time: new Date().toLocaleString(),
-        ip: req.ip
-      }
-    });
 
     res.json({
       success: true,
@@ -147,9 +119,7 @@ router.post('/login', [
           firstName: user.firstName,
           lastName: user.lastName,
           email: user.email,
-          role: user.role,
-          phone: user.phone,
-          avatar: user.avatar
+          role: user.role
         },
         token
       }
@@ -157,43 +127,30 @@ router.post('/login', [
 
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error logging in'
-    });
+    res.status(500).json({ success: false, message: "Login Error: " + error.message });
   }
 });
 
-// Get current user
+// GET CURRENT USER (The "Me" Route)
 router.get('/me', authenticate, async (req, res) => {
   try {
+    // Fix: Use double quotes for CamelCase columns in PostgreSQL
     const user = await dbAsync.get(`
-      SELECT id, firstName, lastName, email, phone, address, city, country, 
-             postalCode, dateOfBirth, avatar, role, isVerified, createdAt, lastLogin
-      FROM users WHERE id = ?
+      SELECT id, "firstName", "lastName", email, phone, address, city, country, 
+             "postalCode", "dateOfBirth", avatar, role, "isVerified", "createdAt", "lastLogin"
+      FROM users WHERE id = $1
     `, [req.user.id]);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    res.json({
-      success: true,
-      data: { user }
-    });
-
+    res.json({ success: true, data: { user } });
   } catch (error) {
     console.error('Get user error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching user'
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // Update profile
 router.put('/profile', authenticate, [
   body('firstName').optional().trim().isLength({ min: 2 }),
