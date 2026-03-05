@@ -9,84 +9,71 @@ const { sendEmail } = require('../services/emailService');
 const router = express.Router();
 
 // Register
+// Register route in backend/routes/auth.js
 router.post('/register', [
-  body('firstName').trim().isLength({ min: 2 }).withMessage('First name is required'),
-  body('lastName').trim().isLength({ min: 2 }).withMessage('Last name is required'),
-  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('phone').optional().trim(),
+  body('firstName').trim().isLength({ min: 2 }),
+  body('lastName').trim().isLength({ min: 2 }),
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        errors: errors.array()
-      });
+      return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const { firstName, lastName, email, password, phone } = req.body;
 
-    // Check if user already exists
-    const existingUser = await dbAsync.get('SELECT * FROM users WHERE email = ?', [email]);
+    // 1. Check if user exists (Note the $1 placeholder)
+    const existingUser = await dbAsync.get('SELECT * FROM users WHERE email = $1', [email]);
     if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User already exists with this email'
-      });
+      return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user
     const userId = uuidv4();
+
+    // 2. INSERT into PostgreSQL
+    // WE MUST USE DOUBLE QUOTES FOR "firstName" AND "lastName"
     await dbAsync.run(`
-      INSERT INTO users (id, firstName, lastName, email, password, phone, isVerified)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [userId, firstName, lastName, email, hashedPassword, phone || null, 1]);
+      INSERT INTO users (id, "firstName", "lastName", email, password, phone, "isVerified")
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [userId, firstName, lastName, email, hashedPassword, phone || null, true]);
 
-    // Create default checking account
-    const accountId = uuidv4();
+    // 3. Create default account
     await dbAsync.run(`
-      INSERT INTO accounts (id, userId, accountNumber, accountType, balance, currency, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [accountId, userId, 'CHK' + Date.now().toString().slice(-8), 'checking', 0, 'USD', 'active']);
+      INSERT INTO accounts (id, "userId", "accountNumber", "accountType", balance, currency, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [uuidv4(), userId, 'CHK' + Date.now().toString().slice(-8), 'checking', 0, 'USD', 'active']);
 
-    // Get created user
-    const user = await dbAsync.get('SELECT * FROM users WHERE id = ?', [userId]);
-
-    // Generate token
+    // Get the created user to return to frontend
+    const user = await dbAsync.get('SELECT * FROM users WHERE id = $1', [userId]);
     const token = generateToken(user);
 
-    // Send welcome email
-    await sendEmail({
-      to: email,
-      subject: 'Welcome to SecureBank!',
-      template: 'welcome',
-      data: { firstName }
-    });
+    // 4. Send Email (Wrapped in try/catch so it doesn't break the registration)
+    try {
+      await sendEmail({
+        to: email,
+        subject: 'Welcome to SecureBank!',
+        template: 'welcome',
+        data: { firstName }
+      });
+    } catch (mailErr) {
+      console.error("Mail Error (User was still created):", mailErr);
+    }
 
     res.status(201).json({
       success: true,
-      message: 'User registered successfully',
-      data: {
-        user: {
-          id: user.id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          role: user.role
-        },
-        token
-      }
+      data: { user, token }
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error registering user'
+    // THIS LINE IS CRUCIAL: It sends the error message back to your browser
+    // and logs it in Render so we can see it.
+    console.error('SERVER CRASH DURING REGISTRATION:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Database Error: " + error.message 
     });
   }
 });
