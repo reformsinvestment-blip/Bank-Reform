@@ -1,11 +1,13 @@
 const jwt = require('jsonwebtoken');
 const { dbAsync } = require('../database/db');
 
-// JWT Configuration (Pulling from your ENV)
+// JWT Configuration - Pulling directly from your Environment Variables
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1d';
 
-// Generate JWT token
+/**
+ * Generate JWT token for Login/Register
+ */
 const generateToken = (user) => {
   return jwt.sign(
     { 
@@ -18,12 +20,17 @@ const generateToken = (user) => {
   );
 };
 
-// Verify JWT token
+/**
+ * Verify JWT token utility
+ */
 const verifyToken = (token) => {
   return jwt.verify(token, JWT_SECRET);
 };
 
-// Authentication middleware
+/**
+ * Authentication middleware
+ * This runs on every private route (Dashboard, Accounts, Transfers, etc.)
+ */
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -35,12 +42,12 @@ const authenticate = async (req, res, next) => {
       });
     }
     
-    const token = authHeader.substring(7);
-    const decoded = verifyToken(token);
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
     
-    // FIX: Updated for PostgreSQL ($1 and double quotes)
+    // FIX: Using quotes for Postgres columns and "?" for the dbAsync helper
     const user = await dbAsync.get(
-      'SELECT id, email, role, "firstName", "lastName", "isActive" FROM users WHERE id = $1',
+      'SELECT id, email, role, "firstName", "lastName", "isActive" FROM users WHERE id = ?',
       [decoded.id]
     );
     
@@ -51,7 +58,7 @@ const authenticate = async (req, res, next) => {
       });
     }
     
-    // Postgres returns a real boolean
+    // Postgres returns a real boolean, so we check strictly against false
     if (user.isActive === false) {
       return res.status(401).json({
         success: false,
@@ -59,19 +66,30 @@ const authenticate = async (req, res, next) => {
       });
     }
     
+    // Attach user to the request object
     req.user = user;
     next();
     
   } catch (error) {
     console.error("Auth Middleware Error:", error.message);
+    
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, message: 'Token expired' });
+      return res.status(401).json({
+        success: false,
+        message: 'Token expired'
+      });
     }
-    return res.status(401).json({ success: false, message: 'Invalid token' });
+    
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid session'
+    });
   }
 };
 
-// Admin authorization middleware
+/**
+ * Admin authorization middleware
+ */
 const authorizeAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({

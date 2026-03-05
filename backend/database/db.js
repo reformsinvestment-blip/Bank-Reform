@@ -17,59 +17,27 @@ const pool = new Pool({
  * This maintains compatibility with your existing code logic.
  */
 const dbAsync = {
+  // Simple conversion: only changes ? to $1, $2
   prepareSql: (sql) => {
     let i = 1;
-    let fixedSql = sql;
-
-    // 1. Only convert ? to $1, $2 if "?" actually exists in the string
-    if (fixedSql.includes('?')) {
-      fixedSql = fixedSql.replace(/\?/g, () => `$${i++}`);
-    }
-
-    // 2. Convert SQLite dates to Postgres
-    fixedSql = fixedSql.replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP')
-                       .replace(/date\('now'\)/gi, 'CURRENT_DATE');
-
-    // 3. SAFE QUOTING: Only add quotes if the word is NOT already quoted
-    const columns = [
-      'userId', 'accountId', 'firstName', 'lastName', 'createdAt', 'updatedAt',
-      'isVerified', 'isActive', 'lastLogin', 'accountNumber', 'accountType',
-      'openedDate', 'dailyLimit', 'currentDailySpend'
-    ];
-
-    columns.forEach(col => {
-      // This regex looks for the column name but makes sure it doesn't have a " before it
-      const regex = new RegExp(`(?<!")\\b${col}\\b(?!")`, 'g');
-      fixedSql = fixedSql.replace(regex, `"${col}"`);
-    });
-
-    return fixedSql;
+    return sql.replace(/\?/g, () => `$${i++}`);
   },
 
   run: async (sql, params = []) => {
-    const processedSql = dbAsync.prepareSql(sql);
-    // Only add RETURNING id if it's an INSERT and doesn't already have a RETURNING clause
-    let finalSql = processedSql;
-    if (processedSql.trim().toUpperCase().startsWith('INSERT') && !processedSql.toUpperCase().includes('RETURNING')) {
-      finalSql = `${processedSql} RETURNING id`;
-    }
-    const res = await pool.query(finalSql, params);
+    const res = await pool.query(dbAsync.prepareSql(sql), params);
     return { id: res.rows[0]?.id || null, changes: res.rowCount };
   },
 
   get: async (sql, params = []) => {
-    const processedSql = dbAsync.prepareSql(sql);
-    const res = await pool.query(processedSql, params);
+    const res = await pool.query(dbAsync.prepareSql(sql), params);
     return res.rows[0];
   },
 
   all: async (sql, params = []) => {
-    const processedSql = dbAsync.prepareSql(sql);
-    const res = await pool.query(processedSql, params);
+    const res = await pool.query(dbAsync.prepareSql(sql), params);
     return res.rows;
   }
 };
-
 
 const initDatabase = async () => {
   try {
