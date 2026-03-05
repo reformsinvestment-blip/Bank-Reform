@@ -134,7 +134,7 @@ router.post('/login', [
 // GET CURRENT USER (The "Me" Route)
 router.get('/me', authenticate, async (req, res) => {
   try {
-    // Fix: Use double quotes for CamelCase columns in PostgreSQL
+    // We MUST use double quotes for CamelCase columns in PostgreSQL
     const user = await dbAsync.get(`
       SELECT id, "firstName", "lastName", email, phone, address, city, country, 
              "postalCode", "dateOfBirth", avatar, role, "isVerified", "createdAt", "lastLogin"
@@ -145,10 +145,15 @@ router.get('/me', authenticate, async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    res.json({ success: true, data: { user } });
+    res.json({
+      success: true,
+      data: { user }
+    });
   } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error('ME ROUTE CRASH:', error);
+    // If this returns 401, you get logged out instantly. 
+    // We return 500 here so we can see the real error.
+    res.status(500).json({ success: false, message: "Server Error: " + error.message });
   }
 });
 // Update profile

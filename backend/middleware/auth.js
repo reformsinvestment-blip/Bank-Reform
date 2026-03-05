@@ -1,9 +1,9 @@
 const jwt = require('jsonwebtoken');
 const { dbAsync } = require('../database/db');
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+// JWT Configuration (Pulling from your ENV)
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1d';
 
 // Generate JWT token
 const generateToken = (user) => {
@@ -38,9 +38,9 @@ const authenticate = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = verifyToken(token);
     
-    // Check if user still exists and is active
+    // FIX: Updated for PostgreSQL ($1 and double quotes)
     const user = await dbAsync.get(
-      'SELECT id, email, role, firstName, lastName, isActive FROM users WHERE id = ?',
+      'SELECT id, email, role, "firstName", "lastName", "isActive" FROM users WHERE id = $1',
       [decoded.id]
     );
     
@@ -51,7 +51,8 @@ const authenticate = async (req, res, next) => {
       });
     }
     
-    if (!user.isActive) {
+    // Postgres returns a real boolean
+    if (user.isActive === false) {
       return res.status(401).json({
         success: false,
         message: 'Account is deactivated'
@@ -62,23 +63,17 @@ const authenticate = async (req, res, next) => {
     next();
     
   } catch (error) {
+    console.error("Auth Middleware Error:", error.message);
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired'
-      });
+      return res.status(401).json({ success: false, message: 'Token expired' });
     }
-    
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token'
-    });
+    return res.status(401).json({ success: false, message: 'Invalid token' });
   }
 };
 
 // Admin authorization middleware
 const authorizeAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
+  if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({
       success: false,
       message: 'Access denied. Admin privileges required.'
@@ -87,24 +82,10 @@ const authorizeAdmin = (req, res, next) => {
   next();
 };
 
-// Role-based authorization middleware
-const authorize = (...roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Insufficient permissions.'
-      });
-    }
-    next();
-  };
-};
-
 module.exports = {
   generateToken,
   verifyToken,
   authenticate,
   authorizeAdmin,
-  authorize,
   JWT_SECRET
 };
