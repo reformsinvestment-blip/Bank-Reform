@@ -102,7 +102,7 @@ export default function Cards() {
       {showModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>
           <div className="bg-noir-700 border border-noir-400 rounded-2xl p-8 w-full max-w-sm animate-fade-in" onClick={e => e.stopPropagation()}>
-            <h2 className="font-display text-2xl text-ink-primary mb-6">Request New Card</h2>
+            <h2 className="font-display text-2xl text-ink-primary mb-6">Request A New Card</h2>
             <div className="space-y-5">
               <div>
                 <label className="field-label">Account</label>
