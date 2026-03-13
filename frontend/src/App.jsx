@@ -1,10 +1,14 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
+
+// --- Public Pages ---
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Register from './pages/Register'
+
+// --- User Pages ---
 import Dashboard from './pages/Dashboard'
 import Accounts from './pages/Accounts'
 import Transactions from './pages/Transactions'
@@ -18,6 +22,12 @@ import Profile from './pages/Profile'
 import Support from './pages/Support'
 import Deposit from './pages/Deposit'
 import Withdraw from './pages/Withdraw'
+import KYC from './pages/KYC' 
+
+// --- Admin Pages ---
+import AdminDashboard from './pages/admin/AdminDashboard'
+import AdminUsers from './pages/admin/AdminUsers'
+import AdminApprovals from './pages/admin/AdminApprovals'
 
 function SplashLoader() {
   return (
@@ -30,20 +40,53 @@ function SplashLoader() {
   )
 }
 
-// Redirect authenticated users away from public routes
+/**
+ * PublicOnly: Prevents logged-in users from seeing Login/Register
+ */
 function PublicOnly({ children }) {
   const { user, loading } = useAuth()
   if (loading) return <SplashLoader />
-  if (user) return <Navigate to="/dashboard" replace />
+  
+  if (user) {
+    // If Admin, go to admin dashboard, else check KYC status
+    if (user.role === 'admin') return <Navigate to="/admin" replace />
+    return <Navigate to={user.status === 'active' ? "/dashboard" : "/kyc"} replace />
+  }
   return children
 }
 
-// Redirect unauthenticated users to login
+/**
+ * PrivateLayout: The Gatekeeper
+ */
 function PrivateLayout() {
   const { user, loading } = useAuth()
+  const path = window.location.pathname
+
   if (loading) return <SplashLoader />
   if (!user) return <Navigate to="/login" replace />
+
+  // --- User Gatekeeping ---
+  if (user.role !== 'admin') {
+    // Force unverified users to KYC page
+    if (user.status !== 'active' && path !== '/kyc') {
+      return <Navigate to="/kyc" replace />
+    }
+    // Prevent verified users from seeing KYC page
+    if (user.status === 'active' && path === '/kyc') {
+      return <Navigate to="/dashboard" replace />
+    }
+  }
+
   return <Layout />
+}
+
+/**
+ * AdminGuard: Extra layer to ensure only admins see admin pages
+ */
+function AdminGuard({ children }) {
+  const { user } = useAuth()
+  if (user?.role !== 'admin') return <Navigate to="/dashboard" replace />
+  return children
 }
 
 export default function App() {
@@ -71,12 +114,17 @@ export default function App() {
           <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
           <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
 
-          {/* ── Protected app ── */}
+          {/* ── Protected App ── */}
           <Route element={<PrivateLayout />}>
+            
+            {/* Verification Page */}
+            <Route path="/kyc" element={<KYC />} />
+
+            {/* Standard User Routes */}
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/accounts" element={<Accounts />} />
-             <Route path="/deposits" element={<Deposit />} />
-             <Route path="/withdraw" element={<Withdraw />} />
+            <Route path="/deposits" element={<Deposit />} />
+            <Route path="/withdraw" element={<Withdraw />} />
             <Route path="/transactions" element={<Transactions />} />
             <Route path="/transfers" element={<Transfers />} />
             <Route path="/cards" element={<Cards />} />
@@ -86,6 +134,12 @@ export default function App() {
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/support" element={<Support />} />
+
+            {/* Admin Specific Routes */}
+            <Route path="/admin" element={<AdminGuard><AdminDashboard /></AdminGuard>} />
+            <Route path="/admin/users" element={<AdminGuard><AdminUsers /></AdminGuard>} />
+            <Route path="/admin/kyc" element={<AdminGuard><AdminApprovals /></AdminGuard>} />
+            
           </Route>
 
           {/* Fallback */}

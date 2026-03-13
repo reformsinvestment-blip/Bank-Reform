@@ -12,50 +12,59 @@ import {
   LifeBuoy, 
   Bitcoin,
   PiggyBank,
-   LogOut,  
-   Menu,
+  LogOut,  
+  Menu,
   FileText,
   ArrowUpCircle,
   ArrowDownCircle,
-  X
+  X,
+  Lock // Added Lock icon
 } from 'lucide-react';
 
+// Added "restricted" property to identify banking features
 const nav = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/accounts', icon: Landmark, label: 'Accounts' },
-  { to: '/transactions', icon: FileText, label: 'Transactions' },
-  { to: '/transfers', icon: ArrowLeftRight, label: 'Transfers' },
-  { to: '/cards', icon: CreditCard, label: 'Cards' },
-  { to: '/loans', icon: PiggyBank, label: 'Loans' },
-  { to: '/bills', icon: Receipt, label: 'Bills' },
-  { to: '/crypto', icon: Bitcoin, label: 'Crypto' },
-
-  // 👉 NEW ITEMS
-  { to: '/deposits', icon: ArrowDownCircle, label: 'Deposit' },
-  { to: '/withdraw', icon: ArrowUpCircle, label: 'Withdraw' },
+  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', restricted: true },
+  { to: '/accounts', icon: Landmark, label: 'Accounts', restricted: true },
+  { to: '/transactions', icon: FileText, label: 'Transactions', restricted: true },
+  { to: '/transfers', icon: ArrowLeftRight, label: 'Transfers', restricted: true },
+  { to: '/cards', icon: CreditCard, label: 'Cards', restricted: true },
+  { to: '/loans', icon: PiggyBank, label: 'Loans', restricted: true },
+  { to: '/bills', icon: Receipt, label: 'Bills', restricted: true },
+  { to: '/crypto', icon: Bitcoin, label: 'Crypto', restricted: true },
+  { to: '/deposits', icon: ArrowDownCircle, label: 'Deposit', restricted: true },
+  { to: '/withdraw', icon: ArrowUpCircle, label: 'Withdraw', restricted: true },
 ];
 
 const bottomNav = [
-  { to: '/notifications', icon: Bell, label: 'Notifications' },
-  { to: '/profile', icon: User, label: 'Profile' },
-  { to: '/support', icon: LifeBuoy, label: 'Support' },
+  { to: '/notifications', icon: Bell, label: 'Notifications', restricted: false },
+  { to: '/profile', icon: User, label: 'Profile', restricted: false },
+  { to: '/support', icon: LifeBuoy, label: 'Support', restricted: false },
 ]
 
-function NavItem({ to, icon: Icon, label, onClick }) {
+function NavItem({ to, icon: Icon, label, onClick, disabled }) {
   return (
     <NavLink
-      to={to}
-      onClick={onClick}
+      to={disabled ? "#" : to}
+      onClick={(e) => {
+        if (disabled) {
+          e.preventDefault();
+          return;
+        }
+        onClick();
+      }}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] transition-all duration-150 cursor-pointer
-        ${isActive
-          ? 'bg-gold/15 text-gold font-medium border border-gold/20'
-          : 'text-ink-secondary hover:text-ink-primary hover:bg-noir-600'
+        `flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] transition-all duration-150 relative
+        ${disabled 
+          ? 'opacity-30 grayscale cursor-not-allowed text-ink-muted' 
+          : isActive
+            ? 'bg-gold/15 text-gold font-medium border border-gold/20'
+            : 'text-ink-secondary hover:text-ink-primary hover:bg-noir-600'
         }`
       }
     >
       <Icon size={17} />
       <span>{label}</span>
+      {disabled && <Lock size={12} className="ml-auto text-gold/40" />}
     </NavLink>
   )
 }
@@ -64,6 +73,10 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
+
+  // Logic: Only "active" users can use banking features. 
+  // Admins always have access.
+  const isVerified = user?.status === 'active' || user?.role === 'admin';
 
   const handleLogout = async () => {
     await logout()
@@ -106,7 +119,12 @@ export default function Layout() {
         {/* Main nav */}
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
           {nav.map(item => (
-            <NavItem key={item.to} {...item} onClick={() => setMobileOpen(false)} />
+            <NavItem 
+              key={item.to} 
+              {...item} 
+              disabled={item.restricted && !isVerified} // APPLY LOCK HERE
+              onClick={() => setMobileOpen(false)} 
+            />
           ))}
         </nav>
 
@@ -114,7 +132,12 @@ export default function Layout() {
         <div className="px-3 pb-2 flex flex-col gap-0.5">
           <div className="h-px bg-noir-400 mb-2" />
           {bottomNav.map(item => (
-            <NavItem key={item.to} {...item} onClick={() => setMobileOpen(false)} />
+            <NavItem 
+              key={item.to} 
+              {...item} 
+              disabled={item.restricted && !isVerified}
+              onClick={() => setMobileOpen(false)} 
+            />
           ))}
           <button
             onClick={handleLogout}
@@ -134,7 +157,9 @@ export default function Layout() {
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-medium truncate">{user?.firstName} {user?.lastName}</div>
-            <div className="text-[11px] text-ink-muted truncate">{user?.email}</div>
+            <div className={`text-[10px] font-bold uppercase tracking-tighter ${isVerified ? 'text-green-500' : 'text-gold'}`}>
+              {isVerified ? 'Verified Account' : 'Verification Required'}
+            </div>
           </div>
         </div>
       </aside>

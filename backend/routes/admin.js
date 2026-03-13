@@ -213,5 +213,108 @@ router.get('/activities', authenticate, authorizeAdmin, async (req, res) => {
     res.json({ success: true, data: { activities } });
   } catch (error) { res.status(500).json({ success: false, message: 'Error fetching activities' }); }
 });
+//8 . for kyc approval
 
+// Approve KYC and Create Account (Admin Only)
+router.post('/users/:id/approve-kyc', authenticate, authorizeAdmin, async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // 1. Get user details
+    const user = await dbAsync.get('SELECT * FROM users WHERE id = $1', [userId]);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    // 2. Update user to Active and Verified
+    await dbAsync.run(`
+      UPDATE users 
+      SET status = 'active', 
+          "isVerified" = true, 
+          "kycStatus" = 'approved',
+          "updatedAt" = CURRENT_TIMESTAMP 
+      WHERE id = $1
+    `, [userId]);
+
+    // 3. CREATE THE BANK ACCOUNT AUTOMATICALLY
+    const accountId = uuidv4();
+    const accountNumber = 'CHK' + Date.now().toString().slice(-8);
+    
+    await dbAsync.run(`
+      INSERT INTO accounts (id, "userId", "accountNumber", "accountType", balance, currency, status)
+      VALUES ($1, $2, $3, 'checking', 0, 'USD', 'active')
+    `, [accountId, userId, accountNumber]);
+
+    // 4. Send the "Account Ready" Email
+    try {
+      await sendEmail({
+        to: user.email,
+        subject: 'Account Approved & Active! - SecureBank',
+        template: 'welcome', 
+        data: {
+          firstName: user.firstName,
+          message: `Great news! Your identity documents have been verified. Your checking account ${accountNumber} is now active and ready for use. You can now deposit funds and start banking.`
+        }
+      });
+    } catch (mailErr) {
+      console.error("Approval Mail Error:", mailErr);
+    }
+
+    res.json({
+      success: true,
+      message: 'KYC Approved and Account Created successfully'
+    });
+
+  } catch (error) {
+    console.error('APPROVAL ERROR:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+//pending kyc list
+router.get('/kyc/pending', authenticate, authorizeAdmin, async (req, res) => {
+  try {
+    const users = await dbAsync.all(`
+      SELECT id, "firstName", "lastName", email, "kycStatus", "createdAt" 
+      FROM users 
+      WHERE status = 'kyc_required' OR "kycStatus" = 'pending_review'
+      ORDER BY "createdAt" ASC
+    `);
+    res.json({ success: true, users });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Reject KYC
+router.post('/users/:id/reject-kyc', authenticate, authorizeAdmin, [
+  body('reason').notEmpty().withMessage('Please provide a reason for rejection')
+], async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { reason } = req.body;
+
+    await dbAsync.run(`
+      UPDATE users 
+      SET "kycStatus" = 'rejected', 
+          "kycRejectedReason" = $1,
+          status = 'kyc_required' 
+      WHERE id = $2
+    `, [reason, userId]);
+
+    const user = await dbAsync.get('SELECT email, "firstName" FROM users WHERE id = $1', [userId]);
+
+    // Send Rejection Email
+    await sendEmail({
+      to: user.email,
+      subject: 'Update regarding your account verification',
+      template: 'welcome',
+      data: {
+        firstName: user.firstName,
+        message: `Your identity verification was not approved for the following reason: ${reason}. Please log in and re-upload clear documents.`
+      }
+    });
+
+    res.json({ success: true, message: 'User rejected and notified' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 module.exports = router;

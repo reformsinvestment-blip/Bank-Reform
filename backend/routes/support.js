@@ -1,11 +1,12 @@
 const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
-const db = require('../database/db');
+const { dbAsync: db } = require('../database/db'); // Updated to use your dbAsync helper
 const { sendEmail } = require('../services/emailService');
+const { v4: uuidv4 } = require('uuid'); 
 const router = express.Router();
 
-// Create support ticket
+// 1. Create support ticket
 router.post('/tickets', authenticate, [
   body('subject').trim().notEmpty().withMessage('Subject is required'),
   body('category').isIn(['account', 'transaction', 'card', 'loan', 'technical', 'other']),
@@ -15,246 +16,175 @@ router.post('/tickets', authenticate, [
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const userId = req.user.id;
     const { subject, category, priority = 'medium', message, attachments = null } = req.body;
 
-    // Generate ticket number
+    // Generate ticket number (Logic preserved)
     const ticketNumber = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+    const ticketId = uuidv4();
 
-    const result = await db.run(
-      `INSERT INTO supportTickets 
-       (userId, ticketNumber, subject, category, priority, status, createdAt)
-       VALUES (?, ?, ?, ?, ?, 'open', datetime('now'))`,
-      [userId, ticketNumber, subject, category, priority]
-    );
-
-    const ticketId = result.id;
-
-    // Add initial message
+    // FIX: Using quotes for "supportTickets", "userId", "ticketNumber", "createdAt"
     await db.run(
-      `INSERT INTO supportMessages 
-       (ticketId, senderType, senderId, message, attachments, createdAt)
-       VALUES (?, 'user', ?, ?, ?, datetime('now'))`,
-      [ticketId, userId, message, attachments ? JSON.stringify(attachments) : null]
+      `INSERT INTO "supportTickets" 
+       (id, "userId", "ticketNumber", subject, category, priority, status, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, 'open', CURRENT_TIMESTAMP)`,
+      [ticketId, userId, ticketNumber, subject, category, priority]
     );
 
-    // Send confirmation email
+    // Add initial message - FIX: Quotes for "supportMessages", "ticketId", "senderType", "senderId"
+    await db.run(
+      `INSERT INTO "supportMessages" 
+       ("id", "ticketId", "senderType", "senderId", message, attachments, "createdAt")
+       VALUES ($1, $2, 'user', $3, $4, $5, CURRENT_TIMESTAMP)`,
+      [uuidv4(), ticketId, userId, message, attachments ? JSON.stringify(attachments) : null]
+    );
+
+    // Send confirmation emails (Logic preserved)
     await sendEmail({
       to: req.user.email,
       subject: `Support Ticket Created - ${ticketNumber}`,
       template: 'supportTicketCreated',
-      data: {
-        name: req.user.firstName,
-        ticketNumber,
-        subject,
-        category,
-        priority
-      }
+      data: { name: req.user.firstName, ticketNumber, subject, category, priority }
     });
 
     // Notify admins
-    const admins = await db.all('SELECT email, firstName FROM users WHERE role = ?', ['admin']);
+    const admins = await db.all('SELECT email, "firstName" FROM users WHERE role = $1', ['admin']);
     for (const admin of admins) {
       await sendEmail({
         to: admin.email,
         subject: `New Support Ticket - ${ticketNumber}`,
         template: 'adminNewTicket',
-        data: {
-          name: admin.firstName,
-          ticketNumber,
-          subject,
-          category,
-          priority,
-          userEmail: req.user.email
-        }
+        data: { name: admin.firstName, ticketNumber, subject, category, priority, userEmail: req.user.email }
       });
     }
 
     res.status(201).json({
+      success: true,
       message: 'Support ticket created successfully',
-      ticket: {
-        id: ticketId,
-        ticketNumber,
-        subject,
-        category,
-        priority,
-        status: 'open',
-        createdAt: new Date().toISOString()
-      }
+      ticket: { id: ticketId, ticketNumber, subject, category, priority, status: 'open', createdAt: new Date().toISOString() }
     });
 
   } catch (error) {
     console.error('Create support ticket error:', error);
-    res.status(500).json({ message: 'Failed to create support ticket' });
+    res.status(500).json({ success: false, message: 'Failed to create support ticket' });
   }
 });
 
-// Get user's support tickets
+// 2. Get user's support tickets
 router.get('/tickets', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { 
-      status, 
-      category, 
-      limit = 20, 
-      offset = 0 
-    } = req.query;
+    const { status, category, limit = 20, offset = 0 } = req.query;
 
-    let query = 'SELECT * FROM supportTickets WHERE userId = ?';
+    let sql = 'SELECT * FROM "supportTickets" WHERE "userId" = $1';
     let params = [userId];
 
     if (status) {
-      query += ' AND status = ?';
+      sql += ` AND status = $${params.length + 1}`;
       params.push(status);
     }
 
     if (category) {
-      query += ' AND category = ?';
+      sql += ` AND category = $${params.length + 1}`;
       params.push(category);
     }
 
-    query += ' ORDER BY createdAt DESC LIMIT ? OFFSET ?';
+    sql += ` ORDER BY "createdAt" DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(parseInt(limit), parseInt(offset));
 
-    const tickets = await db.all(query, params);
+    const tickets = await db.all(sql, params);
 
-    // Get message count for each ticket
+    // Get message count and last message time for each (Logic preserved)
     for (const ticket of tickets) {
-      const { count } = await db.get(
-        'SELECT COUNT(*) as count FROM supportMessages WHERE ticketId = ?',
-        [ticket.id]
-      );
-      ticket.messageCount = count;
+      const msgData = await db.get('SELECT COUNT(*) as count FROM "supportMessages" WHERE "ticketId" = $1', [ticket.id]);
+      ticket.messageCount = parseInt(msgData.count || 0);
 
-      // Get last message time
-      const lastMessage = await db.get(
-        'SELECT createdAt FROM supportMessages WHERE ticketId = ? ORDER BY createdAt DESC LIMIT 1',
-        [ticket.id]
-      );
-      ticket.lastMessageAt = lastMessage ? lastMessage.createdAt : null;
+      const lastMsg = await db.get('SELECT "createdAt" FROM "supportMessages" WHERE "ticketId" = $1 ORDER BY "createdAt" DESC LIMIT 1', [ticket.id]);
+      ticket.lastMessageAt = lastMsg ? lastMsg.createdAt : null;
     }
 
-    // Get total count
-    let countQuery = 'SELECT COUNT(*) as total FROM supportTickets WHERE userId = ?';
-    let countParams = [userId];
-
-    if (status) {
-      countQuery += ' AND status = ?';
-      countParams.push(status);
-    }
-
-    if (category) {
-      countQuery += ' AND category = ?';
-      countParams.push(category);
-    }
-
-    const { total } = await db.get(countQuery, countParams);
+    const countData = await db.get('SELECT COUNT(*) as total FROM "supportTickets" WHERE "userId" = $1', [userId]);
 
     res.json({
+      success: true,
       tickets,
-      pagination: {
-        total,
-        limit: parseInt(limit),
-        offset: parseInt(offset)
-      }
+      pagination: { total: parseInt(countData.total), limit: parseInt(limit), offset: parseInt(offset) }
     });
 
   } catch (error) {
     console.error('Get support tickets error:', error);
-    res.status(500).json({ message: 'Failed to retrieve support tickets' });
+    res.status(500).json({ success: false, message: 'Failed to retrieve tickets' });
   }
 });
 
-// Get single ticket with messages
-router.get('/tickets/:id', authenticate, [
-  param('id').isInt()
-], async (req, res) => {
+// 3. Get single ticket with messages
+router.get('/tickets/:id', authenticate, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { id } = req.params;
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin';
 
-    // Get ticket
-    let query = 'SELECT * FROM supportTickets WHERE id = ?';
-    if (!isAdmin) {
-      query += ' AND userId = ?';
-    }
-
+    // Get ticket - FIX: Quoted columns
+    let sql = 'SELECT * FROM "supportTickets" WHERE id = $1';
     const params = [id];
+
     if (!isAdmin) {
+      sql += ' AND "userId" = $2';
       params.push(userId);
     }
 
-    const ticket = await db.get(query, params);
+    const ticket = await db.get(sql, params);
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
-    if (!ticket) {
-      return res.status(404).json({ message: 'Ticket not found' });
-    }
-
-    // Get user info if admin
     if (isAdmin) {
-      const user = await db.get(
-        'SELECT firstName, lastName, email FROM users WHERE id = ?',
-        [ticket.userId]
-      );
+      const user = await db.get('SELECT "firstName", "lastName", email FROM users WHERE id = $1', [ticket.userId]);
       ticket.user = user;
     }
 
-    // Get messages
+    // Get messages - FIX: Join logic with quotes and || concatenation
     const messages = await db.all(
       `SELECT sm.*, 
         CASE 
-          WHEN sm.senderType = 'user' THEN u.firstName || ' ' || u.lastName
-          WHEN sm.senderType = 'admin' THEN a.firstName || ' ' || a.lastName
+          WHEN sm."senderType" = 'user' THEN u."firstName" || ' ' || u."lastName"
+          WHEN sm."senderType" = 'admin' THEN a."firstName" || ' ' || a."lastName"
           ELSE 'System'
-        END as senderName
-       FROM supportMessages sm
-       LEFT JOIN users u ON sm.senderType = 'user' AND sm.senderId = u.id
-       LEFT JOIN users a ON sm.senderType = 'admin' AND sm.senderId = a.id
-       WHERE sm.ticketId = ?
-       ORDER BY sm.createdAt ASC`,
+        END as "senderName"
+       FROM "supportMessages" sm
+       LEFT JOIN users u ON sm."senderType" = 'user' AND sm."senderId" = u.id
+       LEFT JOIN users a ON sm."senderType" = 'admin' AND sm."senderId" = a.id
+       WHERE sm."ticketId" = $1
+       ORDER BY sm."createdAt" ASC`,
       [id]
     );
 
-    // Parse attachments
+    // Parse attachments (Preserved)
     messages.forEach(msg => {
       if (msg.attachments) {
-        try {
-          msg.attachments = JSON.parse(msg.attachments);
-        } catch {
-          msg.attachments = null;
-        }
+        try { msg.attachments = JSON.parse(msg.attachments); } catch { msg.attachments = null; }
       }
     });
 
-    res.json({
-      ticket,
-      messages
-    });
+    res.json({ success: true, ticket, messages });
 
   } catch (error) {
     console.error('Get ticket error:', error);
-    res.status(500).json({ message: 'Failed to retrieve ticket' });
+    res.status(500).json({ success: false, message: 'Failed to retrieve ticket' });
   }
 });
+// --- CONTINUATION OF backend/routes/support.js ---
 
-// Add message to ticket
+// 4. Add message to ticket
 router.post('/tickets/:id/messages', authenticate, [
-  param('id').isInt(),
+  param('id').notEmpty(),
   body('message').trim().notEmpty()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const { id } = req.params;
@@ -262,231 +192,149 @@ router.post('/tickets/:id/messages', authenticate, [
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin';
 
-    // Verify ticket exists and user has access
-    let query = 'SELECT * FROM supportTickets WHERE id = ?';
-    if (!isAdmin) {
-      query += ' AND userId = ?';
-    }
-
+    // Verify ticket exists - FIX: Quoted table and columns
+    let sql = 'SELECT * FROM "supportTickets" WHERE id = $1';
     const params = [id];
     if (!isAdmin) {
+      sql += ' AND "userId" = $2';
       params.push(userId);
     }
 
-    const ticket = await db.get(query, params);
-
-    if (!ticket) {
-      return res.status(404).json({ message: 'Ticket not found' });
-    }
+    const ticket = await db.get(sql, params);
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
     if (ticket.status === 'closed') {
-      return res.status(400).json({ message: 'Cannot add message to closed ticket' });
+      return res.status(400).json({ success: false, message: 'Cannot add message to closed ticket' });
     }
 
-    // Add message
-    const result = await db.run(
-      `INSERT INTO supportMessages 
-       (ticketId, senderType, senderId, message, attachments, createdAt)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [id, isAdmin ? 'admin' : 'user', userId, message, attachments ? JSON.stringify(attachments) : null]
+    // Add message - FIX: Quoted table/columns and CURRENT_TIMESTAMP
+    const msgId = uuidv4();
+    await db.run(
+      `INSERT INTO "supportMessages" 
+       (id, "ticketId", "senderType", "senderId", message, attachments, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)`,
+      [msgId, id, isAdmin ? 'admin' : 'user', userId, message, attachments ? JSON.stringify(attachments) : null]
     );
 
-    // Update ticket status
+    // Update ticket status (Logic preserved)
     if (isAdmin && ticket.status === 'open') {
-      await db.run(
-        'UPDATE supportTickets SET status = ? WHERE id = ?',
-        ['in_progress', id]
-      );
+      await db.run('UPDATE "supportTickets" SET status = $1 WHERE id = $2', ['in_progress', id]);
     } else if (!isAdmin && ticket.status === 'in_progress') {
-      await db.run(
-        'UPDATE supportTickets SET status = ? WHERE id = ?',
-        ['awaiting_response', id]
-      );
+      await db.run('UPDATE "supportTickets" SET status = $1 WHERE id = $2', ['awaiting_response', id]);
     }
 
-    // Send notification email
+    // Send notifications (Logic preserved)
     if (isAdmin) {
-      // Notify user
-      const user = await db.get('SELECT email, firstName FROM users WHERE id = ?', [ticket.userId]);
+      const user = await db.get('SELECT email, "firstName" FROM users WHERE id = $1', [ticket.userId]);
       await sendEmail({
         to: user.email,
         subject: `New Response on Ticket ${ticket.ticketNumber}`,
         template: 'supportTicketResponse',
-        data: {
-          name: user.firstName,
-          ticketNumber: ticket.ticketNumber,
-          subject: ticket.subject
-        }
+        data: { name: user.firstName, ticketNumber: ticket.ticketNumber, subject: ticket.subject }
       });
     } else {
-      // Notify admins
-      const admins = await db.all('SELECT email, firstName FROM users WHERE role = ?', ['admin']);
+      const admins = await db.all('SELECT email, "firstName" FROM users WHERE role = $1', ['admin']);
       for (const admin of admins) {
         await sendEmail({
           to: admin.email,
           subject: `New Message on Ticket ${ticket.ticketNumber}`,
           template: 'adminTicketMessage',
-          data: {
-            name: admin.firstName,
-            ticketNumber: ticket.ticketNumber,
-            subject: ticket.subject,
-            userEmail: req.user.email
-          }
+          data: { name: admin.firstName, ticketNumber: ticket.ticketNumber, subject: ticket.subject, userEmail: req.user.email }
         });
       }
     }
 
-    res.status(201).json({
-      message: 'Message added successfully',
-      messageId: result.id
-    });
+    res.status(201).json({ success: true, message: 'Message added successfully', messageId: msgId });
 
   } catch (error) {
     console.error('Add message error:', error);
-    res.status(500).json({ message: 'Failed to add message' });
+    res.status(500).json({ success: false, message: 'Failed to add message' });
   }
 });
 
-// Close ticket
-router.put('/tickets/:id/close', authenticate, [
-  param('id').isInt()
-], async (req, res) => {
+// 5. Close ticket
+router.put('/tickets/:id/close', authenticate, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { id } = req.params;
     const userId = req.user.id;
     const isAdmin = req.user.role === 'admin';
 
-    let query = 'SELECT * FROM supportTickets WHERE id = ?';
-    if (!isAdmin) {
-      query += ' AND userId = ?';
-    }
-
+    let sql = 'SELECT * FROM "supportTickets" WHERE id = $1';
     const params = [id];
-    if (!isAdmin) {
-      params.push(userId);
-    }
+    if (!isAdmin) { sql += ' AND "userId" = $2'; params.push(userId); }
 
-    const ticket = await db.get(query, params);
+    const ticket = await db.get(sql, params);
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
-    if (!ticket) {
-      return res.status(404).json({ message: 'Ticket not found' });
-    }
-
+    // FIX: Quoted columns and CURRENT_TIMESTAMP
     await db.run(
-      'UPDATE supportTickets SET status = ?, closedAt = datetime("now") WHERE id = ?',
+      'UPDATE "supportTickets" SET status = $1, "closedAt" = CURRENT_TIMESTAMP WHERE id = $2',
       ['closed', id]
     );
 
-    // Send closure notification
-    const user = await db.get('SELECT email, firstName FROM users WHERE id = ?', [ticket.userId]);
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = $1', [ticket.userId]);
     await sendEmail({
       to: user.email,
       subject: `Ticket ${ticket.ticketNumber} Closed`,
       template: 'supportTicketClosed',
-      data: {
-        name: user.firstName,
-        ticketNumber: ticket.ticketNumber,
-        subject: ticket.subject
-      }
+      data: { name: user.firstName, ticketNumber: ticket.ticketNumber, subject: ticket.subject }
     });
 
-    res.json({ message: 'Ticket closed successfully' });
+    res.json({ success: true, message: 'Ticket closed successfully' });
 
   } catch (error) {
-    console.error('Close ticket error:', error);
-    res.status(500).json({ message: 'Failed to close ticket' });
+    res.status(500).json({ success: false, message: 'Failed to close ticket' });
   }
 });
 
-// Admin: Get all tickets
+// 6. Admin: Get all tickets
 router.get('/admin/tickets', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const { 
-      status, 
-      category, 
-      priority,
-      limit = 20, 
-      offset = 0 
-    } = req.query;
+    const { status, category, priority, limit = 20, offset = 0 } = req.query;
 
-    let query = `SELECT st.*, u.firstName, u.lastName, u.email
-                 FROM supportTickets st
-                 JOIN users u ON st.userId = u.id
+    // FIX: JOIN and column quoting
+    let query = `SELECT st.*, u."firstName", u."lastName", u.email
+                 FROM "supportTickets" st
+                 JOIN users u ON st."userId" = u.id
                  WHERE 1=1`;
     let params = [];
 
-    if (status) {
-      query += ' AND st.status = ?';
-      params.push(status);
-    }
+    if (status) { query += ` AND st.status = $${params.length + 1}`; params.push(status); }
+    if (category) { query += ` AND st.category = $${params.length + 1}`; params.push(category); }
+    if (priority) { query += ` AND st.priority = $${params.length + 1}`; params.push(priority); }
 
-    if (category) {
-      query += ' AND st.category = ?';
-      params.push(category);
-    }
-
-    if (priority) {
-      query += ' AND st.priority = ?';
-      params.push(priority);
-    }
-
-    query += ' ORDER BY st.createdAt DESC LIMIT ? OFFSET ?';
+    query += ` ORDER BY st."createdAt" DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(parseInt(limit), parseInt(offset));
 
     const tickets = await db.all(query, params);
 
-    // Get stats
+    // Get stats - FIX: Quoted table name
     const stats = await db.get(
       `SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open,
-        SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as inProgress,
-        SUM(CASE WHEN status = 'awaiting_response' THEN 1 ELSE 0 END) as awaitingResponse,
+        SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as "inProgress",
+        SUM(CASE WHEN status = 'awaiting_response' THEN 1 ELSE 0 END) as "awaitingResponse",
         SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed
-       FROM supportTickets`
+       FROM "supportTickets"`
     );
 
-    res.json({
-      tickets,
-      stats,
-      pagination: {
-        total: stats.total,
-        limit: parseInt(limit),
-        offset: parseInt(offset)
-      }
-    });
+    res.json({ success: true, tickets, stats, pagination: { total: parseInt(stats.total), limit: parseInt(limit), offset: parseInt(offset) } });
 
   } catch (error) {
-    console.error('Get all tickets error:', error);
-    res.status(500).json({ message: 'Failed to retrieve tickets' });
+    console.error('Admin tickets error:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve tickets' });
   }
 });
 
-// Admin: Update ticket
-router.put('/admin/tickets/:id', authenticate, authorizeAdmin, [
-  param('id').isInt(),
-  body('status').optional().isIn(['open', 'in_progress', 'awaiting_response', 'closed']),
-  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
-  body('assignedTo').optional().isInt()
-], async (req, res) => {
+// 7. Admin: Update ticket
+router.put('/admin/tickets/:id', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { id } = req.params;
     const updates = req.body;
 
-    const ticket = await db.get('SELECT * FROM supportTickets WHERE id = ?', [id]);
-    if (!ticket) {
-      return res.status(404).json({ message: 'Ticket not found' });
-    }
+    const ticket = await db.get('SELECT * FROM "supportTickets" WHERE id = $1', [id]);
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
     const allowedFields = ['status', 'priority', 'assignedTo'];
     const fields = [];
@@ -494,41 +342,31 @@ router.put('/admin/tickets/:id', authenticate, authorizeAdmin, [
 
     allowedFields.forEach(field => {
       if (updates[field] !== undefined) {
-        fields.push(`${field} = ?`);
+        fields.push(`"${field}" = $${values.length + 1}`);
         values.push(updates[field]);
       }
     });
 
-    if (fields.length === 0) {
-      return res.status(400).json({ message: 'No valid fields to update' });
-    }
+    if (fields.length === 0) return res.status(400).json({ message: 'No valid fields' });
 
-    await db.run(
-      `UPDATE supportTickets SET ${fields.join(', ')} WHERE id = ?`,
-      [...values, id]
-    );
+    values.push(id);
+    await db.run(`UPDATE "supportTickets" SET ${fields.join(', ')} WHERE id = $${values.length}`, values);
 
-    // Send notification if status changed
+    // Status change notification (Logic preserved)
     if (updates.status && updates.status !== ticket.status) {
-      const user = await db.get('SELECT email, firstName FROM users WHERE id = ?', [ticket.userId]);
+      const user = await db.get('SELECT email, "firstName" FROM users WHERE id = $1', [ticket.userId]);
       await sendEmail({
         to: user.email,
         subject: `Ticket ${ticket.ticketNumber} Status Updated`,
         template: 'supportTicketStatusUpdate',
-        data: {
-          name: user.firstName,
-          ticketNumber: ticket.ticketNumber,
-          subject: ticket.subject,
-          status: updates.status
-        }
+        data: { name: user.firstName, ticketNumber: ticket.ticketNumber, subject: ticket.subject, status: updates.status }
       });
     }
 
-    res.json({ message: 'Ticket updated successfully' });
+    res.json({ success: true, message: 'Ticket updated successfully' });
 
   } catch (error) {
-    console.error('Update ticket error:', error);
-    res.status(500).json({ message: 'Failed to update ticket' });
+    res.status(500).json({ success: false, message: 'Update failed' });
   }
 });
 

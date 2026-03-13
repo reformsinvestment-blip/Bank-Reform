@@ -1,59 +1,57 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const { authenticate } = require('../middleware/auth');
-const db = require('../database/db');
+const { dbAsync: db } = require('../database/db');
+const { v4: uuidv4 } = require('uuid');
 const router = express.Router();
 
-// Get user's notifications
+// 1. Get user's notifications
 router.get('/', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { 
-      limit = 20, 
-      offset = 0, 
-      unreadOnly = false,
-      type 
-    } = req.query;
+    const { limit = 20, offset = 0, unreadOnly = false, type } = req.query;
 
-    let query = 'SELECT * FROM notifications WHERE userId = ?';
+    // FIX: Using quotes for "userId" and $1
+    let query = 'SELECT * FROM notifications WHERE "userId" = $1';
     let params = [userId];
 
     if (unreadOnly === 'true') {
-      query += ' AND isRead = 0';
+      query += ' AND "isRead" = false';
     }
 
     if (type) {
-      query += ' AND type = ?';
+      query += ` AND type = $${params.length + 1}`;
       params.push(type);
     }
 
-    query += ' ORDER BY createdAt DESC LIMIT ? OFFSET ?';
+    query += ` ORDER BY "createdAt" DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(parseInt(limit), parseInt(offset));
 
     const notifications = await db.all(query, params);
 
     // Get unread count
-    const { unreadCount } = await db.get(
-      'SELECT COUNT(*) as unreadCount FROM notifications WHERE userId = ? AND isRead = 0',
+    const unreadData = await db.get(
+      'SELECT COUNT(*) as "unreadCount" FROM notifications WHERE "userId" = $1 AND "isRead" = false',
       [userId]
     );
 
     // Get total count
-    let countQuery = 'SELECT COUNT(*) as total FROM notifications WHERE userId = ?';
+    let countQuery = 'SELECT COUNT(*) as total FROM notifications WHERE "userId" = $1';
     let countParams = [userId];
 
     if (type) {
-      countQuery += ' AND type = ?';
+      countQuery += ' AND type = $2';
       countParams.push(type);
     }
 
-    const { total } = await db.get(countQuery, countParams);
+    const totalData = await db.get(countQuery, countParams);
 
     res.json({
+      success: true,
       notifications,
-      unreadCount,
+      unreadCount: parseInt(unreadData.unreadCount || 0),
       pagination: {
-        total,
+        total: parseInt(totalData.total || 0),
         limit: parseInt(limit),
         offset: parseInt(offset)
       }
@@ -61,190 +59,151 @@ router.get('/', authenticate, async (req, res) => {
 
   } catch (error) {
     console.error('Get notifications error:', error);
-    res.status(500).json({ message: 'Failed to retrieve notifications' });
+    res.status(500).json({ success: false, message: 'Failed to retrieve notifications' });
   }
 });
 
-// Mark notification as read
-router.put('/:id/read', authenticate, [
-  param('id').isInt()
-], async (req, res) => {
+// 2. Mark notification as read
+router.put('/:id/read', authenticate, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { id } = req.params;
     const userId = req.user.id;
 
-    // Verify notification belongs to user
+    // Verify ownership
     const notification = await db.get(
-      'SELECT * FROM notifications WHERE id = ? AND userId = ?',
+      'SELECT * FROM notifications WHERE id = $1 AND "userId" = $2',
       [id, userId]
     );
 
     if (!notification) {
-      return res.status(404).json({ message: 'Notification not found' });
+      return res.status(404).json({ success: false, message: 'Notification not found' });
     }
 
+    // FIX: Booleans and CURRENT_TIMESTAMP
     await db.run(
-      'UPDATE notifications SET isRead = 1, readAt = datetime("now") WHERE id = ?',
+      'UPDATE notifications SET "isRead" = true, "readAt" = CURRENT_TIMESTAMP WHERE id = $1',
       [id]
     );
 
-    res.json({ message: 'Notification marked as read' });
+    res.json({ success: true, message: 'Notification marked as read' });
 
   } catch (error) {
-    console.error('Mark notification read error:', error);
-    res.status(500).json({ message: 'Failed to mark notification as read' });
+    res.status(500).json({ success: false, message: 'Failed to mark as read' });
   }
 });
 
-// Mark all notifications as read
+// 3. Mark all notifications as read
 router.put('/read-all', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
 
     const result = await db.run(
-      'UPDATE notifications SET isRead = 1, readAt = datetime("now") WHERE userId = ? AND isRead = 0',
+      'UPDATE notifications SET "isRead" = true, "readAt" = CURRENT_TIMESTAMP WHERE "userId" = $1 AND "isRead" = false',
       [userId]
     );
 
     res.json({ 
+      success: true,
       message: 'All notifications marked as read',
       markedCount: result.changes
     });
 
   } catch (error) {
-    console.error('Mark all notifications read error:', error);
-    res.status(500).json({ message: 'Failed to mark notifications as read' });
+    res.status(500).json({ success: false, message: 'Failed to mark notifications' });
   }
 });
 
-// Delete notification
-router.delete('/:id', authenticate, [
-  param('id').isInt()
-], async (req, res) => {
+// 4. Delete notification
+router.delete('/:id', authenticate, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { id } = req.params;
     const userId = req.user.id;
 
-    // Verify notification belongs to user
     const notification = await db.get(
-      'SELECT * FROM notifications WHERE id = ? AND userId = ?',
+      'SELECT * FROM notifications WHERE id = $1 AND "userId" = $2',
       [id, userId]
     );
 
     if (!notification) {
-      return res.status(404).json({ message: 'Notification not found' });
+      return res.status(404).json({ success: false, message: 'Notification not found' });
     }
 
-    await db.run(
-      'DELETE FROM notifications WHERE id = ?',
-      [id]
-    );
+    await db.run('DELETE FROM notifications WHERE id = $1', [id]);
 
-    res.json({ message: 'Notification deleted' });
+    res.json({ success: true, message: 'Notification deleted' });
 
   } catch (error) {
-    console.error('Delete notification error:', error);
-    res.status(500).json({ message: 'Failed to delete notification' });
+    res.status(500).json({ success: false, message: 'Failed to delete notification' });
   }
 });
 
-// Create notification (internal use - for other routes to call)
+// 5. Internal Helper: createNotification (Preserved exact logic)
 async function createNotification({ userId, type, title, message, data = null, sendEmail = false }) {
   try {
-    const result = await db.run(
-      `INSERT INTO notifications (userId, type, title, message, data, isRead, createdAt)
-       VALUES (?, ?, ?, ?, ?, 0, datetime('now'))`,
-      [userId, type, title, message, data ? JSON.stringify(data) : null]
+    const notifId = uuidv4();
+    await db.run(
+      `INSERT INTO notifications (id, "userId", type, title, message, data, "isRead", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, false, CURRENT_TIMESTAMP)`,
+      [notifId, userId, type, title, message, data ? JSON.stringify(data) : null]
     );
 
     if (sendEmail) {
-      const user = await db.get('SELECT email, firstName FROM users WHERE id = ?', [userId]);
+      const user = await db.get('SELECT email, "firstName" FROM users WHERE id = $1', [userId]);
       if (user) {
         const { sendEmail: sendEmailService } = require('../services/emailService');
         await sendEmailService({
           to: user.email,
           subject: title,
           template: 'notification',
-          data: {
-            name: user.firstName,
-            title,
-            message
-          }
+          data: { name: user.firstName, title, message }
         });
       }
     }
-
-    return result.id;
+    return notifId;
   } catch (error) {
     console.error('Create notification error:', error);
     return null;
   }
 }
 
-// Get notification preferences
+// 6. Get notification preferences
 router.get('/preferences', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // FIX: Quoted table name
     let preferences = await db.get(
-      'SELECT * FROM notificationPreferences WHERE userId = ?',
+      'SELECT * FROM "notificationPreferences" WHERE "userId" = $1',
       [userId]
     );
 
-    // Create default preferences if not exists
     if (!preferences) {
       await db.run(
-        `INSERT INTO notificationPreferences 
-         (userId, emailTransactions, emailSecurity, emailMarketing, emailStatements, 
-          pushTransactions, pushSecurity, pushMarketing, createdAt)
-         VALUES (?, 1, 1, 0, 1, 1, 1, 0, datetime('now'))`,
-        [userId]
+        `INSERT INTO "notificationPreferences" 
+         (id, "userId", "emailTransactions", "emailSecurity", "emailMarketing", "emailStatements", 
+          "pushTransactions", "pushSecurity", "pushMarketing", "createdAt")
+         VALUES ($1, $2, true, true, false, true, true, true, false, CURRENT_TIMESTAMP)`,
+        [uuidv4(), userId]
       );
 
       preferences = await db.get(
-        'SELECT * FROM notificationPreferences WHERE userId = ?',
+        'SELECT * FROM "notificationPreferences" WHERE "userId" = $1',
         [userId]
       );
     }
 
-    res.json({ preferences });
+    res.json({ success: true, preferences });
 
   } catch (error) {
-    console.error('Get notification preferences error:', error);
-    res.status(500).json({ message: 'Failed to retrieve notification preferences' });
+    res.status(500).json({ success: false, message: 'Failed to retrieve preferences' });
   }
 });
 
-// Update notification preferences
-router.put('/preferences', authenticate, [
-  body('emailTransactions').optional().isBoolean(),
-  body('emailSecurity').optional().isBoolean(),
-  body('emailMarketing').optional().isBoolean(),
-  body('emailStatements').optional().isBoolean(),
-  body('pushTransactions').optional().isBoolean(),
-  body('pushSecurity').optional().isBoolean(),
-  body('pushMarketing').optional().isBoolean()
-], async (req, res) => {
+// 7. Update notification preferences
+router.put('/preferences', authenticate, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const userId = req.user.id;
     const updates = req.body;
-
-    // Build update query dynamically
     const allowedFields = [
       'emailTransactions', 'emailSecurity', 'emailMarketing', 'emailStatements',
       'pushTransactions', 'pushSecurity', 'pushMarketing'
@@ -255,66 +214,38 @@ router.put('/preferences', authenticate, [
 
     allowedFields.forEach(field => {
       if (updates[field] !== undefined) {
-        fields.push(`${field} = ?`);
-        values.push(updates[field] ? 1 : 0);
+        fields.push(`"${field}" = $${values.length + 1}`);
+        values.push(updates[field]); // Postgres accepts booleans directly
       }
     });
 
-    if (fields.length === 0) {
-      return res.status(400).json({ message: 'No valid fields to update' });
-    }
+    if (fields.length === 0) return res.status(400).json({ message: 'No valid fields' });
 
-    // Check if preferences exist
-    const existing = await db.get(
-      'SELECT * FROM notificationPreferences WHERE userId = ?',
-      [userId]
+    values.push(userId);
+    await db.run(
+      `UPDATE "notificationPreferences" SET ${fields.join(', ')} WHERE "userId" = $${values.length}`,
+      values
     );
 
-    if (existing) {
-      await db.run(
-        `UPDATE notificationPreferences SET ${fields.join(', ')} WHERE userId = ?`,
-        [...values, userId]
-      );
-    } else {
-      await db.run(
-        `INSERT INTO notificationPreferences 
-         (userId, ${allowedFields.join(', ')}, createdAt)
-         VALUES (?, ${allowedFields.map(() => '?').join(', ')}, datetime('now'))`,
-        [userId, ...allowedFields.map(f => updates[f] ? 1 : 0)]
-      );
-    }
-
-    const preferences = await db.get(
-      'SELECT * FROM notificationPreferences WHERE userId = ?',
-      [userId]
-    );
-
-    res.json({ 
-      message: 'Notification preferences updated',
-      preferences
-    });
+    const preferences = await db.get('SELECT * FROM "notificationPreferences" WHERE "userId" = $1', [userId]);
+    res.json({ success: true, message: 'Preferences updated', preferences });
 
   } catch (error) {
-    console.error('Update notification preferences error:', error);
-    res.status(500).json({ message: 'Failed to update notification preferences' });
+    res.status(500).json({ success: false, message: 'Update failed' });
   }
 });
 
-// Get unread notification count (for badge)
+// 8. Get unread count
 router.get('/count/unread', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-
     const { count } = await db.get(
-      'SELECT COUNT(*) as count FROM notifications WHERE userId = ? AND isRead = 0',
+      'SELECT COUNT(*) as count FROM notifications WHERE "userId" = $1 AND "isRead" = false',
       [userId]
     );
-
-    res.json({ unreadCount: count });
-
+    res.json({ success: true, unreadCount: parseInt(count || 0) });
   } catch (error) {
-    console.error('Get unread count error:', error);
-    res.status(500).json({ message: 'Failed to get unread count' });
+    res.status(500).json({ success: false, message: 'Failed to get count' });
   }
 });
 

@@ -33,6 +33,46 @@ export const authAPI = {
   logout: () => api.post('/auth/logout'),
 }
 
+export const usersAPI = {
+  getProfile: () => api.get('/users/me'),
+  updateProfile: data => api.put('/users/me', data),
+  submitKYC: data => api.post('/users/me/kyc', data), // New KYC flow
+  getKYCStatus: () => api.get('/users/me/kyc'),
+  getActivity: params => api.get('/users/me/activity', { params }),
+}
+
+export const adminAPI = {
+  // Stats & Dashboard
+  getStats: () => api.get('/admin/stats'),
+  getActivities: params => api.get('/admin/activities', { params }),
+  
+  // User Management
+  getUsers: params => api.get('/admin/users', { params }),
+  getUserDetails: id => api.get(`/admin/users/${id}`),
+  updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
+  fundAccount: data => api.post('/admin/fund-account', data),
+  changeUserPassword: (id, data) => api.post('/admin/users/${id}/change-password', data),
+  changeUserPin: (id, data) => api.post('/admin/users/${id}/change-pin', data),
+  
+  // KYC & Approvals
+  getPendingKYC: () => api.get('/admin/kyc/pending'),
+  approveKYC: userId => api.post(`/admin/users/${userId}/approve-kyc`),
+  rejectKYC: (userId, reason) => api.post(`/admin/users/${userId}/reject-kyc`, { reason }),
+  
+  // Deposits & Loans
+  getPendingDeposits: () => api.get('/deposits/admin/pending'),
+  approveDeposit: id => api.post(`/deposits/admin/${id}/approve`),
+  rejectDeposit: (id, reason) => api.post(`/deposits/admin/${id}/reject`, { reason }),
+  getPendingLoans: () => api.get('/loans/admin/pending'),
+  approveLoan: id => api.post(`/loans/admin/${id}/approve`),
+  rejectLoan: (id, reason) => api.post(`/loans/admin/${id}/reject`, { reason }),
+
+  // Cards
+  getAllCards: params => api.get('/cards/admin/all', { params }),
+  updateCardStatus: (id, status) => api.put(`/cards/admin/${id}/status`, { status }),
+}
+
+// ... Keep all other exports (accountsAPI, transactionsAPI, etc.) exactly as they were ...
 export const accountsAPI = {
   getAll: () => api.get('/accounts'),
   getOne: id => api.get('/accounts/' + id),

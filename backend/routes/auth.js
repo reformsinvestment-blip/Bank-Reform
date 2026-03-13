@@ -24,7 +24,7 @@ router.post('/register', [
 
     const { firstName, lastName, email, password, phone } = req.body;
 
-    // 1. Check if user exists (Note the $1 placeholder)
+    // 1. Check if user exists
     const existingUser = await dbAsync.get('SELECT * FROM users WHERE email = $1', [email]);
     if (existingUser) {
       return res.status(400).json({ success: false, message: 'User already exists' });
@@ -33,43 +33,38 @@ router.post('/register', [
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
 
-    // 2. INSERT into PostgreSQL
-    // WE MUST USE DOUBLE QUOTES FOR "firstName" AND "lastName"
+    // 2. INSERT user with 'kyc_required' status (NO ACCOUNT CREATED YET)
     await dbAsync.run(`
-      INSERT INTO users (id, "firstName", "lastName", email, password, phone, "isVerified")
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [userId, firstName, lastName, email, hashedPassword, phone || null, true]);
+      INSERT INTO users (id, "firstName", "lastName", email, password, phone, "isVerified", status, "kycStatus")
+      VALUES ($1, $2, $3, $4, $5, $6, false, 'kyc_required', 'pending')
+    `, [userId, firstName, lastName, email, hashedPassword, phone || null]);
 
-    // 3. Create default account
-    await dbAsync.run(`
-      INSERT INTO accounts (id, "userId", "accountNumber", "accountType", balance, currency, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [uuidv4(), userId, 'CHK' + Date.now().toString().slice(-8), 'checking', 0, 'USD', 'active']);
-
-    // Get the created user to return to frontend
+    // Get the created user
     const user = await dbAsync.get('SELECT * FROM users WHERE id = $1', [userId]);
     const token = generateToken(user);
 
-    // 4. Send Email (Wrapped in try/catch so it doesn't break the registration)
+    // 3. Send Email telling them to submit KYC
     try {
       await sendEmail({
         to: email,
-        subject: 'Welcome to SecureBank!',
+        subject: 'Welcome to SecureBank - Action Required',
         template: 'welcome',
-        data: { firstName }
+        data: { 
+          firstName, 
+          message: 'Your profile has been created! To open your bank account, please login and upload your identity documents for KYC verification.' 
+        }
       });
     } catch (mailErr) {
-      console.error("Mail Error (User was still created):", mailErr);
+      console.error("Mail Error:", mailErr);
     }
 
     res.status(201).json({
       success: true,
+      message: 'Registration successful. Please complete KYC to open your account.',
       data: { user, token }
     });
 
   } catch (error) {
-    // THIS LINE IS CRUCIAL: It sends the error message back to your browser
-    // and logs it in Render so we can see it.
     console.error('SERVER CRASH DURING REGISTRATION:', error);
     res.status(500).json({ 
       success: false, 
@@ -77,7 +72,6 @@ router.post('/register', [
     });
   }
 });
-
 // Login
 // LOGIN ROUTE
 router.post('/login', [

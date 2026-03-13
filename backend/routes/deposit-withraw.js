@@ -38,14 +38,17 @@ router.post(
         return res.status(400).json({ success: false, message: 'Amount must be greater than 0' })
       }
 
+      // FIX: Added quotes for "userId" and used $ placeholders
       const account = await dbAsync.get(
-        'SELECT * FROM accounts WHERE id = ? AND userId = ?',
+        'SELECT * FROM accounts WHERE id = $1 AND "userId" = $2',
         [accountId, req.user.id]
       )
+      
       if (!account) {
         return res.status(404).json({ success: false, message: 'Account not found' })
       }
 
+      // Logic preserved exactly
       const transaction = await createTransaction({
         userId: req.user.id,
         accountId,
@@ -59,7 +62,10 @@ router.post(
       res.json({
         success: true,
         message: `Deposit of $${parsedAmount.toFixed(2)} successful`,
-        data: { transaction, newBalance: account.balance + parsedAmount }
+        data: { 
+          transaction, 
+          newBalance: Number(account.balance) + parsedAmount 
+        }
       })
     } catch (err) {
       console.error('Deposit error:', err)
@@ -98,18 +104,21 @@ router.post(
         return res.status(400).json({ success: false, message: 'Amount must be greater than 0' })
       }
 
+      // FIX: Added quotes for "userId" and used $ placeholders
       const account = await dbAsync.get(
-        'SELECT * FROM accounts WHERE id = ? AND userId = ?',
+        'SELECT * FROM accounts WHERE id = $1 AND "userId" = $2',
         [accountId, req.user.id]
       )
+
       if (!account) {
         return res.status(404).json({ success: false, message: 'Account not found' })
       }
 
-      if (account.balance < parsedAmount) {
+      // PostgreSQL returns decimals as strings, so we convert to Number for comparison
+      if (Number(account.balance) < parsedAmount) {
         return res.status(400).json({
           success: false,
-          message: `Insufficient funds. Available: $${account.balance.toFixed(2)}, requested: $${parsedAmount.toFixed(2)}`
+          message: `Insufficient funds. Available: $${Number(account.balance).toFixed(2)}, requested: $${parsedAmount.toFixed(2)}`
         })
       }
 
@@ -126,7 +135,10 @@ router.post(
       res.json({
         success: true,
         message: `Withdrawal of $${parsedAmount.toFixed(2)} successful`,
-        data: { transaction, newBalance: account.balance - parsedAmount }
+        data: { 
+          transaction, 
+          newBalance: Number(account.balance) - parsedAmount 
+        }
       })
     } catch (err) {
       console.error('Withdrawal error:', err)

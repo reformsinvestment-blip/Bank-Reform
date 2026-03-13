@@ -2,12 +2,12 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
-const { dbAsync } = require('../database/db');
+const { dbAsync: db } = require('../database/db');
 const { sendEmail } = require('../services/emailService');
 
 const router = express.Router();
 
-// Calculate loan details
+// Calculate loan details (Preserved Logic)
 const calculateLoan = (amount, interestRate, term) => {
   const monthlyRate = interestRate / 100 / 12;
   const monthlyPayment = (amount * monthlyRate * Math.pow(1 + monthlyRate, term)) / 
@@ -22,13 +22,14 @@ const calculateLoan = (amount, interestRate, term) => {
   };
 };
 
-// Get all loans for current user
+// 1. Get all loans for current user
 router.get('/', authenticate, async (req, res) => {
   try {
-    const loans = await dbAsync.all(`
+    // FIX: Quotes for "userId" and "appliedDate"
+    const loans = await db.all(`
       SELECT * FROM loans 
-      WHERE userId = ? 
-      ORDER BY appliedDate DESC
+      WHERE "userId" = $1 
+      ORDER BY "appliedDate" DESC
     `, [req.user.id]);
 
     res.json({
@@ -42,12 +43,13 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-// Get single loan
+// 2. Get single loan
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const loan = await dbAsync.get(`
+    // FIX: Quotes for "userId"
+    const loan = await db.get(`
       SELECT * FROM loans 
-      WHERE id = ? AND userId = ?
+      WHERE id = $1 AND "userId" = $2
     `, [req.params.id, req.user.id]);
 
     if (!loan) {
@@ -65,7 +67,7 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Apply for loan
+// 3. Apply for loan
 router.post('/apply', authenticate, [
   body('loanType').isIn(['personal', 'home', 'auto', 'education', 'business']),
   body('amount').isFloat({ min: 1000, max: 500000 }),
@@ -80,39 +82,32 @@ router.post('/apply', authenticate, [
 
     const { loanType, amount, term, purpose } = req.body;
 
-    // Get interest rate based on loan type
     const interestRates = {
-      personal: 8.5,
-      home: 5.25,
-      auto: 6.99,
-      education: 4.5,
-      business: 9.5
+      personal: 8.5, home: 5.25, auto: 6.99, education: 4.5, business: 9.5
     };
 
     const interestRate = interestRates[loanType];
     const loanCalc = calculateLoan(amount, interestRate, term);
-
     const loanId = uuidv4();
 
-    await dbAsync.run(`
+    // FIX: Full quotes for all CamelCase columns
+    await db.run(`
       INSERT INTO loans (
-        id, userId, loanType, amount, interestRate, term, 
-        monthlyPayment, totalPayable, remainingAmount, status, purpose
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, "userId", "loanType", amount, "interestRate", term, 
+        "monthlyPayment", "totalPayable", "remainingAmount", status, purpose
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `, [
       loanId, req.user.id, loanType, amount, interestRate, term,
       loanCalc.monthlyPayment, loanCalc.totalPayable, amount, 'pending', purpose
     ]);
 
-    const loan = await dbAsync.get('SELECT * FROM loans WHERE id = ?', [loanId]);
+    const loan = await db.get('SELECT * FROM loans WHERE id = $1', [loanId]);
 
-    // Send notification to admin (in production, use a queue)
-    // Send confirmation to user
+    // Send confirmation email (Preserved Logic)
     await sendEmail({
       to: req.user.email,
       subject: 'Loan Application Received - SecureBank',
       template: 'welcome',
-      userId: req.user.id,
       data: {
         firstName: req.user.firstName,
         loanType,
@@ -134,11 +129,10 @@ router.post('/apply', authenticate, [
   }
 });
 
-// Calculate loan (preview)
+// 4. Calculate loan preview
 router.post('/calculate', async (req, res) => {
   try {
     const { amount, interestRate, term } = req.body;
-
     const loanCalc = calculateLoan(amount, interestRate, term);
 
     res.json({
@@ -149,121 +143,99 @@ router.post('/calculate', async (req, res) => {
         totalInterest: loanCalc.totalInterest
       }
     });
-
   } catch (error) {
-    console.error('Calculate loan error:', error);
     res.status(500).json({ success: false, message: 'Error calculating loan' });
   }
 });
 
-// Admin: Get all pending loans
+// 5. Admin: Get all pending loans
 router.get('/admin/pending', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const loans = await dbAsync.all(`
-      SELECT l.*, u.firstName, u.lastName, u.email
+    // FIX: JOIN columns and sorting
+    const loans = await db.all(`
+      SELECT l.*, u."firstName", u."lastName", u.email
       FROM loans l
-      JOIN users u ON l.userId = u.id
+      JOIN users u ON l."userId" = u.id
       WHERE l.status = 'pending'
-      ORDER BY l.appliedDate ASC
+      ORDER BY l."appliedDate" ASC
     `);
 
     res.json({
       success: true,
       data: { loans }
     });
-
   } catch (error) {
-    console.error('Get pending loans error:', error);
     res.status(500).json({ success: false, message: 'Error fetching pending loans' });
   }
 });
 
-// Admin: Approve loan
+// 6. Admin: Approve loan
 router.post('/admin/:id/approve', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const loan = await dbAsync.get('SELECT * FROM loans WHERE id = ?', [req.params.id]);
+    const loan = await db.get('SELECT * FROM loans WHERE id = $1', [req.params.id]);
+    if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
 
-    if (!loan) {
-      return res.status(404).json({ success: false, message: 'Loan not found' });
-    }
-
-    await dbAsync.run(`
+    // FIX: Postgres syntax for adding 1 month interval
+    await db.run(`
       UPDATE loans 
-      SET status = 'approved', approvedDate = CURRENT_TIMESTAMP, nextPaymentDate = date('now', '+1 month')
-      WHERE id = ?
+      SET status = 'approved', 
+          "approvedDate" = CURRENT_TIMESTAMP, 
+          "nextPaymentDate" = CURRENT_DATE + INTERVAL '1 month'
+      WHERE id = $1
     `, [req.params.id]);
 
-    // Get user details
-    const user = await dbAsync.get('SELECT * FROM users WHERE id = ?', [loan.userId]);
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = $1', [loan.userId]);
 
-    // Send approval email
     await sendEmail({
       to: user.email,
       subject: 'Loan Application Approved - SecureBank',
       template: 'loanApproved',
-      userId: user.id,
       data: {
         firstName: user.firstName,
         loanType: loan.loanType,
-        amount: `$${loan.amount.toLocaleString()}`,
+        amount: `$${parseFloat(loan.amount).toLocaleString()}`,
         interestRate: loan.interestRate,
-        monthlyPayment: `$${loan.monthlyPayment.toFixed(2)}`,
+        monthlyPayment: `$${parseFloat(loan.monthlyPayment).toFixed(2)}`,
         term: `${loan.term} months`
       }
     });
 
-    res.json({
-      success: true,
-      message: 'Loan approved successfully'
-    });
-
+    res.json({ success: true, message: 'Loan approved successfully' });
   } catch (error) {
     console.error('Approve loan error:', error);
     res.status(500).json({ success: false, message: 'Error approving loan' });
   }
 });
 
-// Admin: Reject loan
+// 7. Admin: Reject loan
 router.post('/admin/:id/reject', authenticate, authorizeAdmin, [
   body('reason').notEmpty()
 ], async (req, res) => {
   try {
     const { reason } = req.body;
+    const loan = await db.get('SELECT * FROM loans WHERE id = $1', [req.params.id]);
+    if (!loan) return res.status(404).json({ success: false, message: 'Loan not found' });
 
-    const loan = await dbAsync.get('SELECT * FROM loans WHERE id = ?', [req.params.id]);
-
-    if (!loan) {
-      return res.status(404).json({ success: false, message: 'Loan not found' });
-    }
-
-    await dbAsync.run(`
+    // FIX: Quotes for rejectedDate and rejectionReason
+    await db.run(`
       UPDATE loans 
-      SET status = 'rejected', rejectedDate = CURRENT_TIMESTAMP, rejectionReason = ?
-      WHERE id = ?
+      SET status = 'rejected', 
+          "rejectedDate" = CURRENT_TIMESTAMP, 
+          "rejectionReason" = $1
+      WHERE id = $2
     `, [reason, req.params.id]);
 
-    // Get user details
-    const user = await dbAsync.get('SELECT * FROM users WHERE id = ?', [loan.userId]);
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = $1', [loan.userId]);
 
-    // Send rejection email
     await sendEmail({
       to: user.email,
       subject: 'Loan Application Update - SecureBank',
       template: 'welcome',
-      userId: user.id,
-      data: {
-        firstName: user.firstName,
-        loanType: loan.loanType
-      }
+      data: { firstName: user.firstName, loanType: loan.loanType, reason }
     });
 
-    res.json({
-      success: true,
-      message: 'Loan rejected'
-    });
-
+    res.json({ success: true, message: 'Loan rejected' });
   } catch (error) {
-    console.error('Reject loan error:', error);
     res.status(500).json({ success: false, message: 'Error rejecting loan' });
   }
 });

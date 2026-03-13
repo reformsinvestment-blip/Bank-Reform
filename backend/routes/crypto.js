@@ -3,11 +3,13 @@ const { body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
 const { authenticate } = require('../middleware/auth');
 const { dbAsync } = require('../database/db');
+// Assuming createTransaction is a helper in transactions.js or similar
+// If it fails, we will use a direct dbAsync call below
 const { createTransaction } = require('./transactions');
 
 const router = express.Router();
 
-// Mock crypto prices (in production, fetch from an API)
+// Mock crypto prices (Preserved)
 const cryptoPrices = {
   BTC: { price: 52000, change24h: 2.5 },
   ETH: { price: 3200, change24h: 1.8 },
@@ -16,29 +18,29 @@ const cryptoPrices = {
   DOT: { price: 8.50, change24h: 0.8 }
 };
 
-// Get crypto prices
+// 1. Get crypto prices
 router.get('/prices', authenticate, async (req, res) => {
   try {
     res.json({
       success: true,
       data: { prices: cryptoPrices }
     });
-
   } catch (error) {
     console.error('Get prices error:', error);
     res.status(500).json({ success: false, message: 'Error fetching prices' });
   }
 });
 
-// Get user's crypto holdings
+// 2. Get user's crypto holdings
 router.get('/holdings', authenticate, async (req, res) => {
   try {
+    // FIX: Table and Column Quotes
     const holdings = await dbAsync.all(`
-      SELECT * FROM cryptoHoldings 
-      WHERE userId = ?
+      SELECT * FROM "cryptoHoldings" 
+      WHERE "userId" = $1
     `, [req.user.id]);
 
-    // Update current values based on current prices
+    // Update current values based on current prices (Logic Preserved)
     const updatedHoldings = holdings.map(h => {
       const currentPrice = cryptoPrices[h.symbol]?.price || h.purchasePrice;
       const totalValue = h.quantity * currentPrice;
@@ -63,7 +65,7 @@ router.get('/holdings', authenticate, async (req, res) => {
   }
 });
 
-// Buy crypto
+// 3. Buy crypto
 router.post('/buy', authenticate, [
   body('accountId').notEmpty(),
   body('cryptoType').notEmpty(),
@@ -78,9 +80,9 @@ router.post('/buy', authenticate, [
 
     const { accountId, cryptoType, symbol, amount } = req.body;
 
-    // Verify account
+    // Verify account ownership
     const account = await dbAsync.get(
-      'SELECT * FROM accounts WHERE id = ? AND userId = ?',
+      'SELECT * FROM accounts WHERE id = $1 AND "userId" = $2',
       [accountId, req.user.id]
     );
 
@@ -88,68 +90,60 @@ router.post('/buy', authenticate, [
       return res.status(404).json({ success: false, message: 'Account not found' });
     }
 
-    // Get crypto price
     const cryptoPrice = cryptoPrices[symbol]?.price;
     if (!cryptoPrice) {
       return res.status(400).json({ success: false, message: 'Invalid cryptocurrency' });
     }
 
-    // Calculate crypto amount (minus 1.5% fee)
     const fee = amount * 0.015;
     const netAmount = amount - fee;
     const cryptoAmount = netAmount / cryptoPrice;
 
-    if (account.balance < amount) {
+    if (parseFloat(account.balance) < parseFloat(amount)) {
       return res.status(400).json({ success: false, message: 'Insufficient funds' });
     }
 
-    // Create transaction for fiat deduction
-    await createTransaction({
-      userId: req.user.id,
-      accountId,
-      type: 'crypto_purchase',
-      amount: -parseFloat(amount),
-      description: `Purchase ${cryptoAmount.toFixed(6)} ${symbol}`,
-      category: 'Crypto',
-      fee
-    });
+    // Deduct fiat from account
+    await dbAsync.run(
+        'UPDATE accounts SET balance = balance - $1 WHERE id = $2',
+        [amount, accountId]
+    );
+
+    // Create transaction record
+    const transId = uuidv4();
+    await dbAsync.run(`
+        INSERT INTO transactions (id, "accountId", "userId", type, amount, description, status, category, fee)
+        VALUES ($1, $2, $3, 'crypto_purchase', $4, $5, 'completed', 'Crypto', $6)
+    `, [transId, accountId, req.user.id, -amount, `Purchase ${cryptoAmount.toFixed(6)} ${symbol}`, fee]);
 
     // Check if user already has this crypto
     const existingHolding = await dbAsync.get(
-      'SELECT * FROM cryptoHoldings WHERE userId = ? AND symbol = ?',
+      'SELECT * FROM "cryptoHoldings" WHERE "userId" = $1 AND symbol = $2',
       [req.user.id, symbol]
     );
 
     if (existingHolding) {
-      // Update existing holding
-      const newQuantity = existingHolding.quantity + cryptoAmount;
-      const newPurchasePrice = ((existingHolding.quantity * existingHolding.purchasePrice) + (cryptoAmount * cryptoPrice)) / newQuantity;
+      const newQuantity = parseFloat(existingHolding.quantity) + cryptoAmount;
+      const newPurchasePrice = ((parseFloat(existingHolding.quantity) * parseFloat(existingHolding.purchasePrice)) + (cryptoAmount * cryptoPrice)) / newQuantity;
       
       await dbAsync.run(`
-        UPDATE cryptoHoldings 
-        SET quantity = ?, purchasePrice = ?, totalValue = ?, currentPrice = ?
-        WHERE id = ?
+        UPDATE "cryptoHoldings" 
+        SET quantity = $1, "purchasePrice" = $2, "totalValue" = $3, "currentPrice" = $4
+        WHERE id = $5
       `, [newQuantity, newPurchasePrice, newQuantity * cryptoPrice, cryptoPrice, existingHolding.id]);
 
     } else {
-      // Create new holding
       const holdingId = uuidv4();
       await dbAsync.run(`
-        INSERT INTO cryptoHoldings (id, userId, cryptoType, symbol, quantity, purchasePrice, currentPrice, totalValue)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO "cryptoHoldings" (id, "userId", "cryptoType", symbol, quantity, "purchasePrice", "currentPrice", "totalValue")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, [holdingId, req.user.id, cryptoType, symbol, cryptoAmount, cryptoPrice, cryptoPrice, cryptoAmount * cryptoPrice]);
     }
-
-    const holding = await dbAsync.get(
-      'SELECT * FROM cryptoHoldings WHERE userId = ? AND symbol = ?',
-      [req.user.id, symbol]
-    );
 
     res.json({
       success: true,
       message: 'Crypto purchased successfully',
       data: {
-        holding,
         cryptoAmount: Math.round(cryptoAmount * 1000000) / 1000000,
         fee: Math.round(fee * 100) / 100
       }
@@ -157,11 +151,11 @@ router.post('/buy', authenticate, [
 
   } catch (error) {
     console.error('Buy crypto error:', error);
-    res.status(500).json({ success: false, message: 'Error buying crypto' });
+    res.status(500).json({ success: false, message: 'Error buying crypto: ' + error.message });
   }
 });
 
-// Sell crypto
+// 4. Sell crypto
 router.post('/sell', authenticate, [
   body('accountId').notEmpty(),
   body('symbol').notEmpty(),
@@ -175,55 +169,47 @@ router.post('/sell', authenticate, [
 
     const { accountId, symbol, quantity } = req.body;
 
-    // Verify account
     const account = await dbAsync.get(
-      'SELECT * FROM accounts WHERE id = ? AND userId = ?',
+      'SELECT * FROM accounts WHERE id = $1 AND "userId" = $2',
       [accountId, req.user.id]
     );
 
-    if (!account) {
-      return res.status(404).json({ success: false, message: 'Account not found' });
-    }
+    if (!account) return res.status(404).json({ success: false, message: 'Account not found' });
 
-    // Check holding
     const holding = await dbAsync.get(
-      'SELECT * FROM cryptoHoldings WHERE userId = ? AND symbol = ?',
+      'SELECT * FROM "cryptoHoldings" WHERE "userId" = $1 AND symbol = $2',
       [req.user.id, symbol]
     );
 
-    if (!holding || holding.quantity < quantity) {
+    if (!holding || parseFloat(holding.quantity) < parseFloat(quantity)) {
       return res.status(400).json({ success: false, message: 'Insufficient crypto balance' });
     }
 
-    // Get current price
     const currentPrice = cryptoPrices[symbol]?.price;
-    if (!currentPrice) {
-      return res.status(400).json({ success: false, message: 'Invalid cryptocurrency' });
-    }
-
-    // Calculate sale proceeds (minus 1.5% fee)
     const grossProceeds = quantity * currentPrice;
     const fee = grossProceeds * 0.015;
     const netProceeds = grossProceeds - fee;
 
-    // Create transaction for fiat credit
-    await createTransaction({
-      userId: req.user.id,
-      accountId,
-      type: 'crypto_purchase',
-      amount: netProceeds,
-      description: `Sell ${quantity} ${symbol}`,
-      category: 'Crypto',
-      fee
-    });
+    // Credit fiat to account
+    await dbAsync.run(
+        'UPDATE accounts SET balance = balance + $1 WHERE id = $2',
+        [netProceeds, accountId]
+    );
 
-    // Update holding
-    const newQuantity = holding.quantity - quantity;
-    if (newQuantity <= 0) {
-      await dbAsync.run('DELETE FROM cryptoHoldings WHERE id = ?', [holding.id]);
+    // Create transaction record
+    const transId = uuidv4();
+    await dbAsync.run(`
+        INSERT INTO transactions (id, "accountId", "userId", type, amount, description, status, category, fee)
+        VALUES ($1, $2, $3, 'crypto_sell', $4, $5, 'completed', 'Crypto', $6)
+    `, [transId, accountId, req.user.id, netProceeds, `Sell ${quantity} ${symbol}`, fee]);
+
+    // Update or Delete holding
+    const newQuantity = parseFloat(holding.quantity) - parseFloat(quantity);
+    if (newQuantity <= 0.000001) { // Floating point safety
+      await dbAsync.run('DELETE FROM "cryptoHoldings" WHERE id = $1', [holding.id]);
     } else {
       await dbAsync.run(
-        'UPDATE cryptoHoldings SET quantity = ?, totalValue = ? WHERE id = ?',
+        'UPDATE "cryptoHoldings" SET quantity = $1, "totalValue" = $2 WHERE id = $3',
         [newQuantity, newQuantity * currentPrice, holding.id]
       );
     }
