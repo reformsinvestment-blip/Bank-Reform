@@ -65,7 +65,10 @@ const initDatabase = async () => {
         "accountId" TEXT,
         "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "lastLogin" TIMESTAMP
+        "lastLogin" TIMESTAMP,
+        status TEXT DEFAULT 'active',
+        "kycStatus" TEXT DEFAULT 'none',
+        "kycRejectedReason" TEXT
       )
     `);
 
@@ -328,14 +331,16 @@ const initDatabase = async () => {
       )
     `);
 
-    // 17. KYC Submissions
+    // 17. KYC Submissions (UPDATED with new columns)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS "kycSubmissions" (
         id TEXT PRIMARY KEY,
         "userId" TEXT NOT NULL REFERENCES users(id),
+        "fullName" TEXT,
         "documentType" TEXT NOT NULL,
         "documentNumber" TEXT NOT NULL,
-        "documentImage" TEXT NOT NULL,
+        "idFront" TEXT,
+        "idBack" TEXT,
         "selfieImage" TEXT,
         status TEXT DEFAULT 'pending',
         "submittedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -381,17 +386,31 @@ const initDatabase = async () => {
       )
     `);
 
+    // ─── AUTO-MIGRATION BLOCK ───
+    // This ensures that existing databases get the new columns without you using the dashboard
+    console.log('⏳ Running Auto-Migrations...');
+    await pool.query(`
+      ALTER TABLE "kycSubmissions" 
+      ADD COLUMN IF NOT EXISTS "fullName" TEXT,
+      ADD COLUMN IF NOT EXISTS "idFront" TEXT,
+      ADD COLUMN IF NOT EXISTS "idBack" TEXT;
+      
+      ALTER TABLE "users"
+      ADD COLUMN IF NOT EXISTS "status" TEXT DEFAULT 'active',
+      ADD COLUMN IF NOT EXISTS "kycStatus" TEXT DEFAULT 'none',
+      ADD COLUMN IF NOT EXISTS "kycRejectedReason" TEXT;
+    `);
+
     // Create Indexes
     await pool.query('CREATE INDEX IF NOT EXISTS idx_trans_user ON transactions("userId")');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_acc_user ON accounts("userId")');
 
-    console.log('✅ All PostgreSQL tables initialized successfully');
+    console.log('✅ All PostgreSQL tables initialized and migrated successfully');
     
     // Seed data
     await seedInitialData();
     
   } catch (error) {
-    // UPDATED: Now logging the full error object for better debugging
     console.error('❌ Error initializing PostgreSQL database:', error);
   }
 };

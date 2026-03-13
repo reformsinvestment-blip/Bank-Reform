@@ -371,23 +371,31 @@ router.put('/:id', authenticate, authorizeAdmin, async (req, res) => {
 // kyc verification for user
 router.post('/me/kyc', authenticate, async (req, res) => {
   try {
-    const { documentType, documentNumber, documentImage } = req.body;
+    const { fullName, docNumber, address, idFront, idBack, selfieImage } = req.body;
     const userId = req.user.id;
 
-    // 1. Store the documents
+    // 1. Store everything in the table (Update to match new columns)
     await dbAsync.run(`
-      INSERT INTO "kycSubmissions" (id, "userId", "documentType", "documentNumber", "documentImage", status, "submittedAt")
-      VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP)
-    `, [uuidv4(), userId, documentType, documentNumber, documentImage]);
+      INSERT INTO "kycSubmissions" 
+      (id, "userId", "fullName", "documentNumber", "idFront", "idBack", "selfieImage", status, "submittedAt")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', CURRENT_TIMESTAMP)
+    `, [uuidv4(), userId, fullName, docNumber, idFront, idBack, selfieImage]);
 
-    // 2. Update user status to 'pending_review'
-    await dbAsync.run('UPDATE users SET "kycStatus" = $1 WHERE id = $2', ['pending_review', userId]);
+    // 2. Update the user status so they are "Pending Review"
+    await dbAsync.run(`
+      UPDATE users 
+      SET "kycStatus" = 'pending_review',
+          address = $1
+      WHERE id = $2
+    `, [address, userId]);
 
     res.json({
       success: true,
-      message: 'KYC submitted. An administrator will review your documents shortly.'
+      message: 'KYC submitted successfully. Admin review pending.'
     });
+
   } catch (error) {
+    console.error('KYC Submission Crash:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
