@@ -18,11 +18,14 @@ import {
   ArrowUpCircle,
   ArrowDownCircle,
   X,
-  Lock // Added Lock icon
+  Lock,
+  ShieldCheck, // For Admin KYC
+  Users,       // For Admin Users
+  BarChart3    // For Admin Stats
 } from 'lucide-react';
 
-// Added "restricted" property to identify banking features
-const nav = [
+// ── USER NAVIGATION (Locked if not verified) ──
+const userNav = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', restricted: true },
   { to: '/accounts', icon: Landmark, label: 'Accounts', restricted: true },
   { to: '/transactions', icon: FileText, label: 'Transactions', restricted: true },
@@ -33,6 +36,13 @@ const nav = [
   { to: '/crypto', icon: Bitcoin, label: 'Crypto', restricted: true },
   { to: '/deposits', icon: ArrowDownCircle, label: 'Deposit', restricted: true },
   { to: '/withdraw', icon: ArrowUpCircle, label: 'Withdraw', restricted: true },
+];
+
+// ── ADMIN NAVIGATION (Always Unlocked for Admins) ──
+const adminNav = [
+  { to: '/admin', icon: BarChart3, label: 'Command Center', restricted: false },
+  { to: '/admin/users', icon: Users, label: 'Manage Users', restricted: false },
+  { to: '/admin/kyc', icon: ShieldCheck, label: 'KYC Approvals', restricted: false },
 ];
 
 const bottomNav = [
@@ -50,7 +60,7 @@ function NavItem({ to, icon: Icon, label, onClick, disabled }) {
           e.preventDefault();
           return;
         }
-        onClick();
+        if (onClick) onClick();
       }}
       className={({ isActive }) =>
         `flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] transition-all duration-150 relative
@@ -74,9 +84,12 @@ export default function Layout() {
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
 
-  // Logic: Only "active" users can use banking features. 
-  // Admins always have access.
-  const isVerified = user?.status === 'active' || user?.role === 'admin';
+  // LOGIC: Determine user role and access
+  const isAdmin = user?.role === 'admin';
+  const isVerified = user?.status === 'active' || isAdmin;
+  
+  // SWITCH MENU BASED ON ROLE
+  const currentNav = isAdmin ? adminNav : userNav;
 
   const handleLogout = async () => {
     await logout()
@@ -98,7 +111,7 @@ export default function Layout() {
 
       {/* Sidebar */}
       <aside className={`
-        fixed md:relative top-0 bottom-0 left-0 z-50 w-60 min-w-60
+        fixed md:relative top-0 bottom-0 left-0 z-50 w-64 min-w-64
         flex flex-col bg-noir-800 border-r border-noir-400
         transition-transform duration-250 ease-in-out
         ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
@@ -116,13 +129,16 @@ export default function Layout() {
               <span className="text-gold text-[10px] align-super">®</span>
         </div>
 
-        {/* Main nav */}
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
-          {nav.map(item => (
+        {/* Dynamic Nav: Shows User items or Admin items */}
+        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto custom-scrollbar">
+          <p className="px-3 text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-2">
+            {isAdmin ? 'Administration' : 'Banking Menu'}
+          </p>
+          {currentNav.map(item => (
             <NavItem 
               key={item.to} 
               {...item} 
-              disabled={item.restricted && !isVerified} // APPLY LOCK HERE
+              disabled={item.restricted && !isVerified} 
               onClick={() => setMobileOpen(false)} 
             />
           ))}
@@ -142,23 +158,23 @@ export default function Layout() {
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px]
-                       text-crimson hover:bg-crimson/10 transition-all duration-150 w-full text-left"
+                       text-crimson hover:bg-crimson/10 transition-all duration-150 w-full text-left mt-1"
           >
             <LogOut size={17} />
             <span>Sign Out</span>
           </button>
         </div>
 
-        {/* User pill */}
-        <div className="mx-3 mb-4 mt-1 p-3 rounded-xl bg-noir-600 border border-noir-400 flex items-center gap-3">
+        {/* User Status Pill */}
+        <div className="mx-3 mb-4 mt-1 p-3 rounded-xl bg-noir-600 border border-noir-400 flex items-center gap-3 shadow-inner">
           <div className="w-9 h-9 rounded-full bg-gold/15 border border-gold text-gold
                           flex items-center justify-center text-xs font-semibold flex-shrink-0">
             {initials}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium truncate">{user?.firstName} {user?.lastName}</div>
+            <div className="text-[13px] font-medium truncate text-ink-primary">{user?.firstName} {user?.lastName}</div>
             <div className={`text-[10px] font-bold uppercase tracking-tighter ${isVerified ? 'text-green-500' : 'text-gold'}`}>
-              {isVerified ? 'Verified Account' : 'Verification Required'}
+              {isAdmin ? 'System Administrator' : (isVerified ? 'Verified Account' : 'Verification Required')}
             </div>
           </div>
         </div>
@@ -178,8 +194,8 @@ export default function Layout() {
           <span className="font-display text-xl text-gold tracking-widest">BIFRC</span>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8 md:p-10">
-          <div className="max-w-5xl mx-auto animate-fade-in">
+        <div className="flex-1 overflow-y-auto p-8 md:p-10 bg-noir-900">
+          <div className="max-w-6xl mx-auto animate-fade-in">
             <Outlet />
           </div>
         </div>

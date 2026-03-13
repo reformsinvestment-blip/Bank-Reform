@@ -17,16 +17,36 @@ export default function Login() {
 
   const handleLogin = async (e) => {
     e.preventDefault()
-    if (!form.email || !form.password) { toast.error('Please fill in all fields'); return }
+    if (!form.email || !form.password) { 
+      toast.error('Please fill in all fields')
+      return 
+    }
+    
     setLoading(true)
     try {
-      await login(form.email, form.password)
+      // login function from AuthContext should return the user data
+      const userData = await login(form.email, form.password)
+      
       toast.success('Welcome back!')
-      navigate('/dashboard')
+
+      // ── ROLE-BASED REDIRECTION ──
+      if (userData.role === 'admin') {
+        // If Admin, go straight to Admin Dashboard
+        navigate('/admin')
+      } else if (userData.status !== 'active') {
+        // If User is not verified, force to KYC
+        navigate('/kyc')
+      } else {
+        // If User is active, go to standard Dashboard
+        navigate('/dashboard')
+      }
+
     } catch (err) {
       const msg = err.response?.data?.message || err.response?.data?.errors?.[0]?.msg || 'Invalid email or password'
       toast.error(msg)
-    } finally { setLoading(false) }
+    } finally { 
+      setLoading(false) 
+    }
   }
 
   const handleForgot = async (e) => {
@@ -39,30 +59,32 @@ export default function Login() {
       setForgotMode(false)
       setForgotEmail('')
     } catch {
+      // Security practice: don't confirm if email exists or not
       toast.success('If an account exists, a reset link has been sent.')
+      setForgotMode(false)
     } finally { setForgotLoading(false) }
   }
 
   return (
     <div className="min-h-screen bg-noir-900 flex overflow-hidden">
-      {/* Left panel — branding */}
+      {/* Left panel — branding (Preserved exactly) */}
       <div className="hidden lg:flex flex-col justify-between w-2/5 bg-noir-800 border-r border-noir-400 p-12 relative overflow-hidden">
-        {/* Decorative */}
         <div className="absolute -bottom-32 -left-32 w-96 h-96 rounded-full border border-gold/10" />
         <div className="absolute -bottom-16 -left-16 w-64 h-64 rounded-full border border-gold/10" />
         <div className="absolute top-1/3 -right-24 w-64 h-64 bg-gold/5 rounded-full blur-3xl" />
 
         <Link to="/" className="flex items-center gap-2 group">
           <img 
-                src="/logo.jpeg" 
-                alt="BIFRC Logo" 
-                className="h-14 w-auto object-contain rounded-full" 
-              />
-              <span className="font-display text-2xl tracking-widest text-ink-primary">
-                BIFRC
-              </span>
-              <span className="text-gold text-[10px] align-super">®</span>
+            src="/logo.jpeg" 
+            alt="BIFRC Logo" 
+            className="h-14 w-auto object-contain rounded-full" 
+          />
+          <span className="font-display text-2xl tracking-widest text-ink-primary">
+            BIFRC
+          </span>
+          <span className="text-gold text-[10px] align-super">®</span>
         </Link>
+        
         <div>
           <h2 className="font-display text-5xl font-light text-ink-primary mb-4 leading-tight">
             Your finances,<br /><span className="text-gold italic">secured.</span>
@@ -80,12 +102,11 @@ export default function Login() {
           </div>
         </div>
 
-        <p className="text-xs text-ink-muted">© {new Date().getFullYear()} SecureBank. FDIC Insured.</p>
+        <p className="text-xs text-ink-muted">© {new Date().getFullYear()} BIFRC. Secure Banking.</p>
       </div>
 
       {/* Right panel — form */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 relative">
-        {/* Grid lines */}
         <div className="absolute inset-0 pointer-events-none opacity-20">
           {[25, 50, 75].map(p => (
             <div key={p} className="absolute w-px h-full bg-gradient-to-b from-transparent via-noir-400 to-transparent" style={{ left: `${p}%` }} />
@@ -148,7 +169,7 @@ export default function Login() {
                   {loading ? (
                     <span className="flex items-center justify-center gap-2">
                       <span className="w-4 h-4 rounded-full border-2 border-noir-900/30 border-t-noir-900 animate-spin" />
-                      Signing in…
+                      Authenticating…
                     </span>
                   ) : 'Sign In'}
                 </button>

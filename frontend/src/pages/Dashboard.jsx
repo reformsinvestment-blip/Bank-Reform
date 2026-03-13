@@ -33,7 +33,7 @@ export default function Dashboard() {
     }).catch(() => {}).finally(() => setLoading(false))
   }, [])
 
-  const totalBalance = accounts.reduce((s, a) => s + (a.balance || 0), 0)
+const total = accounts.reduce((acc, curr) => acc + (Number(curr.balance) || 0), 0)
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
