@@ -28,6 +28,7 @@ import KYC from './pages/KYC'
 import AdminDashboard from './pages/admin/AdminDashboard'
 import AdminUsers from './pages/admin/AdminUsers'
 import AdminApprovals from './pages/admin/AdminApprovals'
+import AdminReview from './pages/admin/AdminReview'
 
 function SplashLoader() {
   return (
@@ -139,6 +140,7 @@ export default function App() {
             <Route path="/admin" element={<AdminGuard><AdminDashboard /></AdminGuard>} />
             <Route path="/admin/users" element={<AdminGuard><AdminUsers /></AdminGuard>} />
             <Route path="/admin/kyc" element={<AdminGuard><AdminApprovals /></AdminGuard>} />
+            <Route path="/admin/review" element={<AdminGuard><AdminReview /></AdminGuard>} />
             
           </Route>
 
