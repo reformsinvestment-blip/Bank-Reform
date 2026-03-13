@@ -45,30 +45,30 @@ const initDatabase = async () => {
 
     // 1. Users Table
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        "firstName" TEXT NOT NULL,
-        "lastName" TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        phone TEXT,
-        address TEXT,
-        city TEXT,
-        country TEXT,
-        "postalCode" TEXT,
-        "dateOfBirth" TEXT,
-        avatar TEXT,
-        role TEXT DEFAULT 'user',
-        "isVerified" BOOLEAN DEFAULT FALSE,
-        "isActive" BOOLEAN DEFAULT TRUE,
-        pin TEXT,
-        "accountId" TEXT,
-        "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "lastLogin" TIMESTAMP,
-        status TEXT DEFAULT 'active',
-        "kycStatus" TEXT DEFAULT 'none',
-        "kycRejectedReason" TEXT
+   CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    "firstName" TEXT NOT NULL,
+    "lastName" TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    phone TEXT,
+    address TEXT,
+    city TEXT,
+    country TEXT,
+    "postalCode" TEXT,
+    "dateOfBirth" TEXT,
+    avatar TEXT,
+    role TEXT DEFAULT 'user',
+    "isVerified" BOOLEAN DEFAULT FALSE,
+    "isActive" BOOLEAN DEFAULT TRUE,
+    pin TEXT,
+    "accountId" TEXT,
+    "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    "lastLogin" TIMESTAMP,
+    status TEXT DEFAULT 'inactive',                    
+    "kycStatus" TEXT DEFAULT 'awaiting_documents',    
+    "kycRejectedReason" TEXT
       )
     `);
 
@@ -402,23 +402,35 @@ const initDatabase = async () => {
     `);
 
     // Create Indexes
+     console.log('⏳ Running Onboarding Security Migrations...');
+    await pool.query(`
+      -- Ensure new columns exist
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'inactive';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS "kycStatus" TEXT DEFAULT 'awaiting_documents';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS "kycRejectedReason" TEXT;
+
+      -- Force existing defaults to be secure for all future registrations
+      ALTER TABLE users ALTER COLUMN status SET DEFAULT 'inactive';
+      ALTER TABLE users ALTER COLUMN "kycStatus" SET DEFAULT 'awaiting_documents';
+    `);
+
+    // Create Indexes
     await pool.query('CREATE INDEX IF NOT EXISTS idx_trans_user ON transactions("userId")');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_acc_user ON accounts("userId")');
 
-    console.log('✅ All PostgreSQL tables initialized and migrated successfully');
-    
+    console.log('✅ All PostgreSQL tables initialized and security defaults applied');
+
     // Seed data
     await seedInitialData();
-    
+
   } catch (error) {
     console.error('❌ Error initializing PostgreSQL database:', error);
   }
 };
-
 const seedInitialData = async () => {
   try {
     const admin = await dbAsync.get("SELECT * FROM users WHERE email = $1", ['admin@securebank.com']);
-    
+
     if (!admin) {
       const adminId = uuidv4();
       const hashedPassword = await bcrypt.hash('admin123', 10);
@@ -431,19 +443,19 @@ const seedInitialData = async () => {
 
     const demoUser = await dbAsync.get("SELECT * FROM users WHERE email = $1", ['demo@securebank.com']);
     if (!demoUser) {
-        const userId = uuidv4();
-        const hashedPassword = await bcrypt.hash('demo123', 10);
-        await pool.query(`
+      const userId = uuidv4();
+      const hashedPassword = await bcrypt.hash('demo123', 10);
+      await pool.query(`
           INSERT INTO users (id, "firstName", "lastName", email, password, role, "isVerified")
           VALUES ($1, $2, $3, $4, $5, $6, $7)
         `, [userId, 'John', 'Doe', 'demo@securebank.com', hashedPassword, 'user', true]);
 
-        const accId = uuidv4();
-        await pool.query(`
+      const accId = uuidv4();
+      await pool.query(`
           INSERT INTO accounts (id, "userId", "accountNumber", "accountType", balance)
           VALUES ($1, $2, $3, $4, $5)
         `, [accId, userId, 'CHK' + Date.now(), 'checking', 5000.00]);
-        console.log('✅ Demo user seeded');
+      console.log('✅ Demo user seeded');
     }
   } catch (error) {
     console.error('❌ Error seeding data:', error);

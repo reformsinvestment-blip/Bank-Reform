@@ -50,22 +50,63 @@ export default function AdminUsers() {
             </tr>
           </thead>
           <tbody className="divide-y divide-noir-400 text-ink-secondary">
-            {users.map(u => (
-              <tr key={u.id}>
-                <td className="p-4">
-                  <div className="text-ink-primary font-medium">{u.firstName} {u.lastName}</div>
-                  <div className="text-xs text-ink-muted">{u.email}</div>
-                </td>
-                <td className="p-4">
-                  <span className={u.isActive ? "text-green-500" : "text-crimson"}>{u.isActive ? 'Active' : 'Disabled'}</span>
-                </td>
-                <td className="p-4 capitalize">{u.kycStatus || 'None'}</td>
-                <td className="p-4 text-right">
-                  <button onClick={() => handleFund(u.id)} className="btn-gold text-xs py-1 px-3">Fund</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
+  {users.map(u => {
+    // LOGIC: A user is only truly "Active" if account is enabled AND KYC is approved
+    const isFullyActive = u.isActive && u.kycStatus === 'approved';
+    const isPending = u.kycStatus === 'pending_review';
+    
+    return (
+      <tr key={u.id} className="hover:bg-noir-600/20 transition-colors">
+        <td className="p-4">
+          <div className="text-ink-primary font-medium">{u.firstName} {u.lastName}</div>
+          <div className="text-xs text-ink-muted">{u.email}</div>
+        </td>
+        
+        {/* UPDATED STATUS COLUMN */}
+        <td className="p-4">
+          {isFullyActive ? (
+            <span className="flex items-center gap-1.5 text-green-500 text-xs font-bold uppercase tracking-wider">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              Active
+            </span>
+          ) : isPending ? (
+            <span className="text-gold text-xs font-bold uppercase tracking-wider">
+              Pending KYC
+            </span>
+          ) : (
+            <span className="text-ink-muted text-xs font-bold uppercase tracking-wider">
+              Inactive
+            </span>
+          )}
+        </td>
+
+        <td className="p-4">
+          <span className={`text-[11px] px-2 py-0.5 rounded-md border 
+            ${u.kycStatus === 'approved' ? 'border-green-500/30 text-green-500 bg-green-500/5' : 
+              u.kycStatus === 'pending_review' ? 'border-gold/30 text-gold bg-gold/5' : 
+              'border-noir-400 text-ink-muted bg-noir-800'}`}>
+            {u.kycStatus === 'approved' ? 'Verified' : 
+             u.kycStatus === 'pending_review' ? 'In Review' : 'No Documents'}
+          </span>
+        </td>
+
+        <td className="p-4 text-right">
+          {/* Only allow funding if they are verified */}
+          <button 
+            onClick={() => handleFund(u.id)} 
+            disabled={!isFullyActive}
+            className={`text-xs py-1.5 px-4 rounded-lg font-semibold transition-all
+              ${isFullyActive 
+                ? 'bg-gold text-noir-900 hover:bg-gold-light' 
+                : 'bg-noir-500 text-ink-muted cursor-not-allowed'}`}
+          >
+            Fund
+          </button>
+        </td>
+      </tr>
+    )
+  })}
+</tbody>
         </table>
       </div>
     </div>
