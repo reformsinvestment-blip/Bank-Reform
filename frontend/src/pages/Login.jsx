@@ -15,7 +15,7 @@ export default function Login() {
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotLoading, setForgotLoading] = useState(false)
 
-   const handleLogin = async (e) => {
+    const handleLogin = async (e) => {
     e.preventDefault()
     if (!form.email || !form.password) { 
       toast.error('Please fill in all fields')
@@ -24,26 +24,19 @@ export default function Login() {
     
     setLoading(true)
     try {
-      // The login function now returns the user object from the database
       const userData = await login(form.email, form.password)
-      
       toast.success('Welcome back!')
 
-      // ── ROLE-BASED REDIRECTION LOGIC ──
-      if (userData.role === 'admin') {
-        // 1. Admins go to Command Center
-        navigate('/admin')
-      } else if (userData.status === 'active') {
-        // 2. Verified Users go to Dashboard
-        navigate('/dashboard')
-      } else if (userData.status === 'pending_review' || userData.kycStatus === 'pending_review') {
-        // 3. Submitted Users stay on the "Under Review" screen
-        navigate('/kyc')
-      } else {
-        // 4. New/Inactive Users go to the start of KYC
-        navigate('/kyc')
-      }
-
+      // ── ROLE-BASED REDIRECTION ──
+ if (userData.role === 'admin') {
+  navigate('/admin')
+} else if (userData.status === 'active') {
+  navigate('/dashboard')
+} else if (userData.status === 'pending_review' || userData.kycStatus === 'pending_review') {
+  navigate('/kyc-pending') // Redirect to the NEW status page
+} else {
+  navigate('/kyc') // Redirect to the FORM page
+}
     } catch (err) {
       const msg = err.response?.data?.message || 'Invalid email or password'
       toast.error(msg)
@@ -51,7 +44,6 @@ export default function Login() {
       setLoading(false) 
     }
   }
-
   const handleForgot = async (e) => {
     e.preventDefault()
     if (!forgotEmail) { toast.error('Enter your email address'); return }

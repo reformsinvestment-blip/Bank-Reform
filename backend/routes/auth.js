@@ -113,7 +113,9 @@ router.post('/login', [
           firstName: user.firstName,
           lastName: user.lastName,
           email: user.email,
-          role: user.role
+          role: user.role,
+          status: user.status,     
+          kycStatus: user.kycStatus
         },
         token
       }

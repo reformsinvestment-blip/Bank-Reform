@@ -1,14 +1,12 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 
-// --- Public Pages ---
+// --- Pages ---
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Register from './pages/Register'
-
-// --- User Pages ---
 import Dashboard from './pages/Dashboard'
 import Accounts from './pages/Accounts'
 import Transactions from './pages/Transactions'
@@ -23,8 +21,9 @@ import Support from './pages/Support'
 import Deposit from './pages/Deposit'
 import Withdraw from './pages/Withdraw'
 import KYC from './pages/KYC' 
+import KYCPending from './pages/KYCPending' 
 
-// --- Admin Pages ---
+// --- Admin ---
 import AdminDashboard from './pages/admin/AdminDashboard'
 import AdminUsers from './pages/admin/AdminUsers'
 import AdminApprovals from './pages/admin/AdminApprovals'
@@ -41,23 +40,19 @@ function SplashLoader() {
   )
 }
 
-/**
- * PublicOnly: Prevents logged-in users from seeing Login/Register
- */
 function PublicOnly({ children }) {
   const { user, loading } = useAuth()
   if (loading) return <SplashLoader />
-  
   if (user) {
-    // If Admin, go to admin dashboard, else check KYC status
     if (user.role === 'admin') return <Navigate to="/admin" replace />
-    return <Navigate to={user.status === 'active' ? "/dashboard" : "/kyc"} replace />
+    const isPending = user.status === 'pending_review' || user.kycStatus === 'pending_review';
+    return <Navigate to={user.status === 'active' ? "/dashboard" : (isPending ? "/kyc-pending" : "/kyc")} replace />
   }
   return children
 }
 
 /**
- * PrivateLayout: The Gatekeeper
+ * THE FIX: Updated PrivateLayout to allow /kyc-pending
  */
 function PrivateLayout() {
   const { user, loading } = useAuth()
@@ -66,24 +61,31 @@ function PrivateLayout() {
   if (loading) return <SplashLoader />
   if (!user) return <Navigate to="/login" replace />
 
-  // --- User Gatekeeping ---
   if (user.role !== 'admin') {
-    // Force unverified users to KYC page
-    if (user.status !== 'active' && path !== '/kyc') {
-      return <Navigate to="/kyc" replace />
-    }
-    // Prevent verified users from seeing KYC page
-    if (user.status === 'active' && path === '/kyc') {
+    const isPending = user.status === 'pending_review' || user.kycStatus === 'pending_review';
+    
+    // 1. If Active: Block KYC pages
+    if (user.status === 'active' && (path === '/kyc' || path === '/kyc-pending')) {
       return <Navigate to="/dashboard" replace />
+    }
+
+    // 2. If Not Active: Only allow KYC flow and basic settings
+    // ADDED '/kyc-pending' TO THE ALLOWED LIST BELOW
+    const allowed = ['/kyc', '/kyc-pending', '/profile', '/support', '/notifications'];
+    if (user.status !== 'active' && !allowed.includes(path)) {
+      // Direct them to the correct step based on status
+      return <Navigate to={isPending ? "/kyc-pending" : "/kyc"} replace />
+    }
+
+    // 3. If Pending and trying to see the form: Push to pending screen
+    if (isPending && path === '/kyc') {
+      return <Navigate to="/kyc-pending" replace />
     }
   }
 
   return <Layout />
 }
 
-/**
- * AdminGuard: Extra layer to ensure only admins see admin pages
- */
 function AdminGuard({ children }) {
   const { user } = useAuth()
   if (user?.role !== 'admin') return <Navigate to="/dashboard" replace />
@@ -94,34 +96,15 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <Toaster
-          position="top-right"
-          toastOptions={{
-            style: {
-              background: '#1c1c24',
-              color: '#f0ede8',
-              border: '1px solid #2a2a38',
-              fontFamily: '"DM Sans", sans-serif',
-              fontSize: '14px',
-              borderRadius: '12px',
-            },
-            success: { iconTheme: { primary: '#4caf82', secondary: '#0a0a0c' } },
-            error:   { iconTheme: { primary: '#e05c5c', secondary: '#0a0a0c' } },
-          }}
-        />
+        <Toaster position="top-right" />
         <Routes>
-          {/* ── Public routes ── */}
           <Route path="/" element={<PublicOnly><Landing /></PublicOnly>} />
           <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
           <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
 
-          {/* ── Protected App ── */}
           <Route element={<PrivateLayout />}>
-            
-            {/* Verification Page */}
             <Route path="/kyc" element={<KYC />} />
-
-            {/* Standard User Routes */}
+            <Route path="/kyc-pending" element={<KYCPending />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/deposits" element={<Deposit />} />
@@ -136,15 +119,12 @@ export default function App() {
             <Route path="/profile" element={<Profile />} />
             <Route path="/support" element={<Support />} />
 
-            {/* Admin Specific Routes */}
             <Route path="/admin" element={<AdminGuard><AdminDashboard /></AdminGuard>} />
             <Route path="/admin/users" element={<AdminGuard><AdminUsers /></AdminGuard>} />
             <Route path="/admin/kyc" element={<AdminGuard><AdminApprovals /></AdminGuard>} />
             <Route path="/admin/review" element={<AdminGuard><AdminReview /></AdminGuard>} />
-            
           </Route>
 
-          {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
