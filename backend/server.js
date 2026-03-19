@@ -32,6 +32,10 @@ const { initDatabase } = require('./database/db');
 
 // Initialize Express app
 const app = express();
+app.use((req, res, next) => {
+  console.log(`🚀 [${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+  next();
+});
 const PORT = process.env.PORT || 5000;
 
 // ---------------------------

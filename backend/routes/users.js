@@ -4,97 +4,71 @@ const { authenticate, authorizeAdmin } = require('../middleware/auth');
 const { dbAsync: db } = require('../database/db'); // Points to your smart db.js
 const { sendEmail } = require('../services/emailService');
 const router = express.Router();
+const { v4: uuidv4 } = require('uuid');
 
-// 1. Get current user profile
+// 1. Get current user profile (The fix for the refresh loop)
 router.get('/me', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // FIX: Wrapped CamelCase columns in quotes and used $1
     const user = await db.get(
       `SELECT id, email, "firstName", "lastName", phone, address, city, state, 
               country, "postalCode", "dateOfBirth", "kycStatus", "kycVerifiedAt",
               "twoFactorEnabled", "emailVerified", "phoneVerified", 
-              "createdAt", "lastLoginAt", "profileImage"
-       FROM users WHERE id = $1`,
+              "createdAt", "lastLoginAt", "profileImage", status, role
+       FROM users WHERE id = ?`,
       [userId]
     );
 
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    // Get user's accounts - FIX: Quoted columns
     const accounts = await db.all(
       `SELECT id, "accountNumber", "accountType", balance, currency, 
-              status, "isDefault", "createdAt"
-       FROM accounts WHERE "userId" = $1 AND status = 'active'`,
+              status, "createdAt"
+       FROM accounts WHERE "userId" = ?`,
       [userId]
     );
 
-    // Get user's cards count
-    const cardData = await db.get(
-      'SELECT COUNT(*) as "cardCount" FROM cards WHERE "userId" = $1 AND status = $2',
-      [userId, 'active']
-    );
-
-    // Get unread notifications count - FIX: Boolean check
-    const unreadData = await db.get(
-      'SELECT COUNT(*) as "unreadCount" FROM notifications WHERE "userId" = $1 AND "isRead" = false',
-      [userId]
-    );
+    const cardData = await db.get('SELECT COUNT(*) as count FROM cards WHERE "userId" = ?', [userId]);
+    const unreadData = await db.get('SELECT COUNT(*) as count FROM notifications WHERE "userId" = ? AND "isRead" = false', [userId]);
 
     res.json({
       success: true,
       user: {
         ...user,
-        accounts,
+        accounts: accounts || [],
         stats: {
-          cardCount: parseInt(cardData.cardCount || 0),
-          unreadNotifications: parseInt(unreadData.unreadCount || 0)
+          cardCount: parseInt(cardData?.count || 0),
+          unreadNotifications: parseInt(unreadData?.count || 0)
         }
       }
     });
-
   } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({ success: false, message: 'Failed to retrieve profile' });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // 2. Update user profile
-router.put('/me', authenticate, [
-  body('firstName').optional().trim().notEmpty(),
-  body('lastName').optional().trim().notEmpty()
-], async (req, res) => {
+router.put('/me', authenticate, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
     const userId = req.user.id;
     const updates = req.body;
-    const allowedFields = ['firstName', 'lastName', 'phone', 'address', 'city', 'state', 'country', 'postalCode', 'dateOfBirth'];
-
+    const allowedFields = ['firstName', 'lastName', 'phone', 'address', 'city', 'state', 'country', 'postalCode'];
     const fields = [];
     const values = [];
 
     allowedFields.forEach(field => {
       if (updates[field] !== undefined) {
-        fields.push(`"${field}" = $${values.length + 1}`);
+        fields.push(`"${field}" = ?`);
         values.push(updates[field]);
       }
     });
 
-    if (fields.length === 0) return res.status(400).json({ message: 'No valid fields to update' });
-
+    if (fields.length === 0) return res.status(400).json({ message: 'No valid fields' });
     values.push(userId);
-    await db.run(`UPDATE users SET ${fields.join(', ')} WHERE id = $${values.length}`, values);
-
-    const user = await db.get(`SELECT * FROM users WHERE id = $1`, [userId]);
-    res.json({ success: true, message: 'Profile updated successfully', user });
-
+    await db.run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
+    res.json({ success: true, message: 'Profile updated' });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to update profile' });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -247,49 +221,47 @@ router.put('/me/2fa', authenticate, [
   }
 });
 
-// 9. Submit KYC documents
+//  Get KYC status
 router.post('/me/kyc', authenticate, async (req, res) => {
   try {
+    const { fullName, docType, docNumber, address, idFront, idBack, selfieImage } = req.body;
     const userId = req.user.id;
-    const { documentType, documentNumber, documentImage, selfieImage } = req.body;
 
-    // FIX: Quoted table name and columns
+    console.log("📥 [KYC] Processing for:", fullName);
+
+    // FIX: Using "db" (not dbAsync) and correct column count
+    const query = `
+      INSERT INTO "kycSubmissions" 
+      (id, "userId", "fullName", "documentType", "documentNumber", "idFront", "idBack", "selfieImage", status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `;
+
+    const params = [
+      uuidv4(), 
+      userId, 
+      fullName, 
+      docType || 'passport', 
+      docNumber, 
+      idFront, 
+      idBack, 
+      selfieImage
+    ];
+
+    await db.run(query, params);
+
+    // Update main user record
     await db.run(
-      `INSERT INTO "kycSubmissions" 
-       (id, "userId", "documentType", "documentNumber", "documentImage", "selfieImage", status, "submittedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending', CURRENT_TIMESTAMP)`,
-      [uuidv4(), userId, documentType, documentNumber, documentImage, selfieImage]
+      'UPDATE users SET "kycStatus" = ?, status = ?, address = ? WHERE id = ?', 
+      ['pending_review', 'pending_review', address, userId]
     );
 
-    await db.run('UPDATE users SET "kycStatus" = $1 WHERE id = $2', ['pending', userId]);
+    res.json({ success: true, message: 'KYC Submitted Successfully' });
 
-    res.json({ success: true, message: 'KYC submitted successfully', status: 'pending' });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to submit KYC' });
+    console.error('❌ KYC ROUTE ERROR:', error.message);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
-
-// 10. Get KYC status
-router.get('/me/kyc', authenticate, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    // FIX: Quoted columns
-    const kyc = await db.get(
-      'SELECT "kycStatus", "kycVerifiedAt", "kycRejectedReason" FROM users WHERE id = $1',
-      [userId]
-    );
-
-    const submissions = await db.all(
-      'SELECT "documentType", status, "submittedAt", "reviewedAt", "rejectionReason" FROM "kycSubmissions" WHERE "userId" = $1 ORDER BY "submittedAt" DESC',
-      [userId]
-    );
-
-    res.json({ success: true, kycStatus: kyc.kycStatus, verifiedAt: kyc.kycVerifiedAt, submissions });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to retrieve KYC status' });
-  }
-});
-
 // 11. Admin: Get all users
 router.get('/', authenticate, authorizeAdmin, async (req, res) => {
   try {
@@ -371,33 +343,54 @@ router.put('/:id', authenticate, authorizeAdmin, async (req, res) => {
 // kyc verification for user
 router.post('/me/kyc', authenticate, async (req, res) => {
   try {
-    const { fullName, docNumber, address, idFront, idBack, selfieImage } = req.body;
+    const { fullName, docType, docNumber, address, idFront, idBack, selfieImage } = req.body;
     const userId = req.user.id;
 
-    // 1. Store everything in the table (Update to match new columns)
-    await dbAsync.run(`
+    console.log("📥 [KYC] Received data for:", fullName);
+
+    // FIX: We use plain column names. 
+    // The dbAsync.prepareSql helper in your db.js will add the quotes automatically.
+    // Order: id, userId, fullName, documentType, documentNumber, idFront, idBack, selfieImage, status (9 columns)
+    const query = `
       INSERT INTO "kycSubmissions" 
-      (id, "userId", "fullName", "documentNumber", "idFront", "idBack", "selfieImage", status, "submittedAt")
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', CURRENT_TIMESTAMP)
-    `, [uuidv4(), userId, fullName, docNumber, idFront, idBack, selfieImage]);
+      (id, userId, fullName, documentType, documentNumber, idFront, idBack, selfieImage, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `;
 
-    // 2. Update the user status so they are "Pending Review"
-    await dbAsync.run(`
-      UPDATE users 
-      SET "kycStatus" = 'pending_review',
-          address = $1
-      WHERE id = $2
-    `, [address, userId]);
+    const params = [
+      uuidv4(), 
+      userId, 
+      fullName, 
+      docType || 'passport', 
+      docNumber, 
+      idFront, 
+      idBack, 
+      selfieImage
+    ];
 
-    res.json({
-      success: true,
-      message: 'KYC submitted successfully. Admin review pending.'
+    // 1. Save to the KYC table
+    await dbAsync.run(query, params);
+
+    // 2. Update the main users table status
+    // This is the line that stops the refresh loop
+    await dbAsync.run(
+      'UPDATE users SET kycStatus = ?, status = ?, address = ? WHERE id = ?', 
+      ['pending_review', 'pending_review', address, userId]
+    );
+
+    console.log("✅ [KYC] Database updated successfully");
+
+    res.json({ 
+      success: true, 
+      message: 'KYC documents submitted successfully' 
     });
 
   } catch (error) {
-    console.error('KYC Submission Crash:', error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error('❌ KYC ROUTE ERROR:', error.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Database Error: " + error.message 
+    });
   }
 });
-
 module.exports = router;

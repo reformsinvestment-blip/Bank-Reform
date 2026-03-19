@@ -15,7 +15,7 @@ export default function Login() {
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotLoading, setForgotLoading] = useState(false)
 
-  const handleLogin = async (e) => {
+   const handleLogin = async (e) => {
     e.preventDefault()
     if (!form.email || !form.password) { 
       toast.error('Please fill in all fields')
@@ -24,25 +24,28 @@ export default function Login() {
     
     setLoading(true)
     try {
-      // login function from AuthContext should return the user data
+      // The login function now returns the user object from the database
       const userData = await login(form.email, form.password)
       
       toast.success('Welcome back!')
 
-      // ── ROLE-BASED REDIRECTION ──
+      // ── ROLE-BASED REDIRECTION LOGIC ──
       if (userData.role === 'admin') {
-        // If Admin, go straight to Admin Dashboard
+        // 1. Admins go to Command Center
         navigate('/admin')
-      } else if (userData.status !== 'active') {
-        // If User is not verified, force to KYC
+      } else if (userData.status === 'active') {
+        // 2. Verified Users go to Dashboard
+        navigate('/dashboard')
+      } else if (userData.status === 'pending_review' || userData.kycStatus === 'pending_review') {
+        // 3. Submitted Users stay on the "Under Review" screen
         navigate('/kyc')
       } else {
-        // If User is active, go to standard Dashboard
-        navigate('/dashboard')
+        // 4. New/Inactive Users go to the start of KYC
+        navigate('/kyc')
       }
 
     } catch (err) {
-      const msg = err.response?.data?.message || err.response?.data?.errors?.[0]?.msg || 'Invalid email or password'
+      const msg = err.response?.data?.message || 'Invalid email or password'
       toast.error(msg)
     } finally { 
       setLoading(false) 

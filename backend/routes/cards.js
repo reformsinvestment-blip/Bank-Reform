@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
-const { dbAsync: db } = require('../database/db'); // Points to your smart db.js
+const {  db } = require('../database/db'); // Points to your smart db.js
 const { sendEmail } = require('../services/emailService');
 const crypto = require('crypto');
 const router = express.Router();
