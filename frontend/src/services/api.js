@@ -36,7 +36,7 @@ export const authAPI = {
 export const usersAPI = {
   getProfile: () => api.get('/users/me'),
   updateProfile: data => api.put('/users/me', data),
-  submitKYC: data => api.post('/users/me/kyc', data), // New KYC flow
+  submitKYC: data => api.post('/users/me/kyc', data), 
   getKYCStatus: () => api.get('/users/me/kyc'),
   getActivity: params => api.get('/users/me/activity', { params }),
 }
@@ -57,6 +57,7 @@ export const adminAPI = {
   // KYC & Approvals
   getPendingKYC: () => api.get('/admin/kyc/pending'),
   approveKYC: userId => api.post(`/admin/users/${userId}/approve-kyc`),
+  getKYCDocuments: (id) => api.get('/admin/users/${userId}/kyc-docs'),
   rejectKYC: (userId, reason) => api.post(`/admin/users/${userId}/reject-kyc`, { reason }),
   
   // Deposits & Loans
@@ -72,7 +73,6 @@ export const adminAPI = {
   updateCardStatus: (id, status) => api.put(`/cards/admin/${id}/status`, { status }),
 }
 
-// ... Keep all other exports (accountsAPI, transactionsAPI, etc.) exactly as they were ...
 export const accountsAPI = {
   getAll: () => api.get('/accounts'),
   getOne: id => api.get('/accounts/' + id),
