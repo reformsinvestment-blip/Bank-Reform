@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { Analytics } from "@vercel/analytics/react"
 import Layout from './components/Layout'
 
 // --- Pages ---
@@ -107,6 +108,7 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+      <Analytics /> 
         <Toaster position="top-right" />
         <Routes>
           <Route path="/" element={<PublicOnly><Landing /></PublicOnly>} />
