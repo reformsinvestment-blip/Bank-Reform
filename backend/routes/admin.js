@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { body, validationResult } = require('express-validator');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
-const { dbAsync: db } = require('../database/db'); // Consistent use of 'db'
+const { dbAsync: db } = require('../database/db'); 
 const { sendEmail } = require('../services/emailService');
 
 const router = express.Router();
@@ -37,10 +37,7 @@ router.get('/stats', authenticate, authorizeAdmin, async (req, res) => {
         users: userStats,
         accounts: accountStats,
         transactions: transactionStats,
-        pending: {
-          loans: pendingLoans.count,
-          deposits: pendingDeposits.count
-        }
+        pending: { loans: pendingLoans.count, deposits: pendingDeposits.count }
       }
     });
   } catch (error) {
@@ -67,7 +64,7 @@ router.get('/users', authenticate, authorizeAdmin, async (req, res) => {
   }
 });
 
-// ─── 3. NEW ROUTE: VIEW KYC DOCUMENTS ───
+// 3. NEW ROUTE: VIEW KYC DOCUMENTS
 router.get('/users/:id/kyc-docs', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const docs = await db.get(
@@ -97,44 +94,39 @@ router.get('/users/:id', authenticate, authorizeAdmin, async (req, res) => {
   }
 });
 
-// 5. Approve KYC and Create Account
+// 5. Approve KYC and Create Account + SEND EMAIL
 router.post('/users/:id/approve-kyc', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const userId = req.params.id;
     const user = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    // Update User status to ACTIVE
     await db.run(`
       UPDATE users 
       SET status = 'active', "isVerified" = true, "kycStatus" = 'approved', "updatedAt" = CURRENT_TIMESTAMP 
       WHERE id = ?
     `, [userId]);
 
-    // Create the Bank Account (Checking for existing to prevent duplicates)
     const existingAcc = await db.get('SELECT id FROM accounts WHERE "userId" = ?', [userId]);
-    let accountNumber = '';
+    let accountNumber = 'CHK' + Date.now().toString().slice(-8);
     
     if (!existingAcc) {
-      accountNumber = 'CHK' + Date.now().toString().slice(-8);
       await db.run(`
         INSERT INTO accounts (id, "userId", "accountNumber", "accountType", balance, currency, status)
-        VALUES (?, ?, ?, 'checking', 50.00, 'USD', 'active')
-      `, [uuidv4(), userId, accountNumber]); // Bonus: Gave them $50 for joining
+        VALUES (?, ?, ?, 'checking', 0.00, 'USD', 'active')
+      `, [uuidv4(), userId, accountNumber]);
     }
 
-    // Send the Activation Email
-    try {
-      await sendEmail({
-        to: user.email,
-        subject: 'Account Approved & Active! - BIFRC',
-        template: 'welcome', 
-        data: {
-          firstName: user.firstName,
-          message: `Your identity has been verified. Your checking account is now active. Login now to view your dashboard.`
-        }
-      });
-    } catch (mailErr) { console.error("Email failed, but user is approved."); }
+    // EMAIL: Notify user of approval and new account
+    await sendEmail({
+      to: user.email,
+      subject: 'Account Approved & Active - BIFRC',
+      template: 'welcome',
+      data: {
+        firstName: user.firstName,
+        message: `Congratulations! Your identity documents have been verified. Your checking account ${accountNumber} is now active and ready for use.`
+      }
+    });
 
     res.json({ success: true, message: 'User approved and account created' });
   } catch (error) {
@@ -142,20 +134,33 @@ router.post('/users/:id/approve-kyc', authenticate, authorizeAdmin, async (req, 
   }
 });
 
-// 6. Reject KYC
+// 6. Reject KYC + SEND EMAIL
 router.post('/users/:id/reject-kyc', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { reason } = req.body;
     await db.run('UPDATE users SET "kycStatus" = ?, "kycRejectedReason" = ?, status = ? WHERE id = ?', 
       ['rejected', reason, 'inactive', req.params.id]);
     
-    res.json({ success: true, message: 'User rejected' });
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = ?', [req.params.id]);
+    
+    // EMAIL: Notify user of rejection
+    await sendEmail({
+      to: user.email,
+      subject: 'Update Regarding Your Account Verification',
+      template: 'welcome',
+      data: {
+        firstName: user.firstName,
+        message: `Unfortunately, your identity verification was not approved for the following reason: ${reason}. Please login and re-submit clear documents.`
+      }
+    });
+
+    res.json({ success: true, message: 'User rejected and notified' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 7. Fund user account
+// 7. Fund user account + SEND EMAIL
 router.post('/fund-account', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const { accountId, amount, description } = req.body;
@@ -164,12 +169,26 @@ router.post('/fund-account', authenticate, authorizeAdmin, async (req, res) => {
 
     await db.run('UPDATE accounts SET balance = balance + ? WHERE id = ?', [amount, accountId]);
 
+    const ref = 'ADMIN-' + Date.now();
     await db.run(`
       INSERT INTO transactions (id, "accountId", "userId", type, amount, currency, description, status, category, reference)
       VALUES (?, ?, ?, 'deposit', ?, ?, ?, 'completed', 'Deposit', ?)
-    `, [uuidv4(), accountId, account.userId, amount, account.currency, description || 'Admin funding', 'ADMIN-' + Date.now()]);
+    `, [uuidv4(), accountId, account.userId, amount, account.currency, description || 'Admin funding', ref]);
 
-    res.json({ success: true, message: 'Account funded successfully' });
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = ?', [account.userId]);
+
+    // EMAIL: Notify user of credit
+    await sendEmail({
+      to: user.email,
+      subject: 'Transaction Alert: Account Credited',
+      template: 'welcome',
+      data: {
+        firstName: user.firstName,
+        message: `An administrative credit of $${amount} has been applied to your account ${account.accountNumber}. Reference: ${ref}`
+      }
+    });
+
+    res.json({ success: true, message: 'Account funded and user notified' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -189,32 +208,57 @@ router.get('/kyc/pending', authenticate, authorizeAdmin, async (req, res) => {
   }
 });
 
-// 9. Admin Security Actions
+// 9. Admin Security Actions + SEND EMAILS
 router.post('/users/:id/change-password', authenticate, authorizeAdmin, async (req, res) => {
   try {
     const hashedPassword = await bcrypt.hash(req.body.newPassword, 10);
     await db.run('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, req.params.id]);
-    res.json({ success: true, message: 'Password changed' });
-  } catch (e) { res.status(500).json({ success: false }); }
+    
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = ?', [req.params.id]);
+    await sendEmail({
+      to: user.email,
+      subject: 'Security Alert: Password Changed',
+      template: 'welcome',
+      data: {
+        firstName: user.firstName,
+        message: 'Your account password has been changed by a system administrator. If you did not request this, contact us immediately.'
+      }
+    });
+
+    res.json({ success: true, message: 'Password updated and user notified' });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
 router.post('/users/:id/change-pin', authenticate, authorizeAdmin, async (req, res) => {
   try {
     await db.run('UPDATE users SET pin = ? WHERE id = ?', [req.body.newPin, req.params.id]);
-    res.json({ success: true, message: 'PIN updated' });
-  } catch (e) { res.status(500).json({ success: false }); }
+    
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = ?', [req.params.id]);
+    await sendEmail({
+      to: user.email,
+      subject: 'Security Alert: Transaction PIN Changed',
+      template: 'welcome',
+      data: {
+        firstName: user.firstName,
+        message: 'Your transaction PIN has been successfully reset by an administrator.'
+      }
+    });
+
+    res.json({ success: true, message: 'PIN updated and user notified' });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
-//10 activities 
+
+// 10. Admin Activities
 router.get('/activities', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const activities = await dbAsync.all(`
+    const activities = await db.all(`
       SELECT a.*, u."firstName", u."lastName"
       FROM "adminActions" a
       JOIN users u ON a."adminId" = u.id
-      ORDER BY a."performedAt" DESC LIMIT $1
+      ORDER BY a."performedAt" DESC LIMIT ?
     `, [parseInt(req.query.limit || 50)]);
     res.json({ success: true, data: { activities } });
-  } catch (error) { res.status(500).json({ success: false, message: 'Error fetching activities' }); }
-})
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
 
 module.exports = router;

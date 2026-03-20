@@ -1,56 +1,42 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
-const { dbAsync: db } = require('../database/db'); // Points to your smart db.js
+const { dbAsync: db } = require('../database/db'); 
 const { sendEmail } = require('../services/emailService');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcryptjs');
 
-// 1. Get current user profile (The fix for the refresh loop)
+// ---------------------------------------------------------
+// 1. GET CURRENT PROFILE (Full Data & Stats)
+// ---------------------------------------------------------
 router.get('/me', authenticate, async (req, res) => {
   try {
-    const userId = req.user.id;
-
     const user = await db.get(
       `SELECT id, email, "firstName", "lastName", phone, address, city, state, 
               country, "postalCode", "dateOfBirth", "kycStatus", "kycVerifiedAt",
               "twoFactorEnabled", "emailVerified", "phoneVerified", 
               "createdAt", "lastLoginAt", "profileImage", status, role
-       FROM users WHERE id = ?`,
-      [userId]
+       FROM users WHERE id = ?`, [req.user.id]
     );
-
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    const accounts = await db.all(
-      `SELECT id, "accountNumber", "accountType", balance, currency, 
-              status, "createdAt"
-       FROM accounts WHERE "userId" = ?`,
-      [userId]
-    );
-
-    const cardData = await db.get('SELECT COUNT(*) as count FROM cards WHERE "userId" = ?', [userId]);
-    const unreadData = await db.get('SELECT COUNT(*) as count FROM notifications WHERE "userId" = ? AND "isRead" = false', [userId]);
+    const accounts = await db.all(`SELECT * FROM accounts WHERE "userId" = ?`, [req.user.id]);
+    const cardData = await db.get('SELECT COUNT(*) as count FROM cards WHERE "userId" = ?', [req.user.id]);
+    const unreadData = await db.get('SELECT COUNT(*) as count FROM notifications WHERE "userId" = ? AND "isRead" = false', [req.user.id]);
 
     res.json({
       success: true,
-      user: {
-        ...user,
-        accounts: accounts || [],
-        stats: {
-          cardCount: parseInt(cardData?.count || 0),
-          unreadNotifications: parseInt(unreadData?.count || 0)
-        }
-      }
+      user: { ...user, accounts, stats: { cardCount: cardData?.count || 0, unreadNotifications: unreadData?.count || 0 } }
     });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
-// 2. Update user profile
+
+// ---------------------------------------------------------
+// 2. UPDATE PROFILE (+ Email Notification)
+// ---------------------------------------------------------
 router.put('/me', authenticate, async (req, res) => {
   try {
-    const userId = req.user.id;
     const updates = req.body;
     const allowedFields = ['firstName', 'lastName', 'phone', 'address', 'city', 'state', 'country', 'postalCode'];
     const fields = [];
@@ -64,333 +50,233 @@ router.put('/me', authenticate, async (req, res) => {
     });
 
     if (fields.length === 0) return res.status(400).json({ message: 'No valid fields' });
-    values.push(userId);
+    values.push(req.user.id);
     await db.run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
+
+    // Notification
+    await sendEmail({
+      to: req.user.email,
+      subject: 'Security Alert: Profile Information Updated',
+      template: 'welcome',
+      data: { firstName: req.user.firstName, message: 'This is a confirmation that your BIFRC profile details have been successfully updated.' }
+    });
+
     res.json({ success: true, message: 'Profile updated' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
-// 3. Upload profile image
+// ---------------------------------------------------------
+// 3. UPLOAD AVATAR (+ Email Notification)
+// ---------------------------------------------------------
 router.post('/me/avatar', authenticate, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { image } = req.body;
-    if (!image) return res.status(400).json({ message: 'Image is required' });
+    const imageUrl = `/uploads/avatars/${req.user.id}_${Date.now()}.jpg`;
+    await db.run('UPDATE users SET "profileImage" = ? WHERE id = ?', [imageUrl, req.user.id]);
+    
+    await sendEmail({
+      to: req.user.email,
+      subject: 'Profile Image Changed',
+      template: 'welcome',
+      data: { firstName: req.user.firstName, message: 'Your BIFRC account profile image was just changed.' }
+    });
 
-    const imageUrl = `/uploads/avatars/${userId}_${Date.now()}.jpg`;
-
-    // FIX: Quoted "profileImage"
-    await db.run('UPDATE users SET "profileImage" = $1 WHERE id = $2', [imageUrl, userId]);
-
-    res.json({ success: true, message: 'Profile image updated', imageUrl });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to upload profile image' });
-  }
+    res.json({ success: true, imageUrl });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
-// 4. Get user settings
+// ---------------------------------------------------------
+// 4. GET SETTINGS
+// ---------------------------------------------------------
 router.get('/me/settings', authenticate, async (req, res) => {
   try {
-    // FIX: Quoted columns
-    const settings = await db.get(
-      `SELECT "twoFactorEnabled", "loginNotifications", "transactionNotifications",
-              "marketingEmails", language, timezone, currency
-       FROM users WHERE id = $1`,
-      [req.user.id]
-    );
+    const settings = await db.get(`SELECT "twoFactorEnabled", "loginNotifications", "transactionNotifications", "marketingEmails", language, timezone, currency FROM users WHERE id = ?`, [req.user.id]);
     res.json({ success: true, settings });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to retrieve settings' });
-  }
+  } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 5. Update user settings
+// ---------------------------------------------------------
+// 5. UPDATE SETTINGS (+ Email Notification)
+// ---------------------------------------------------------
 router.put('/me/settings', authenticate, async (req, res) => {
   try {
-    const userId = req.user.id;
     const updates = req.body;
-    const allowedFields = ['twoFactorEnabled', 'loginNotifications', 'transactionNotifications', 'marketingEmails', 'language', 'timezone', 'currency'];
-
+    const allowed = ['twoFactorEnabled', 'loginNotifications', 'transactionNotifications', 'marketingEmails', 'language', 'currency'];
     const fields = [];
     const values = [];
 
-    allowedFields.forEach(field => {
-      if (updates[field] !== undefined) {
-        fields.push(`"${field}" = $${values.length + 1}`);
-        values.push(updates[field]);
+    allowed.forEach(f => {
+      if (updates[f] !== undefined) {
+        fields.push(`"${f}" = ?`);
+        values.push(updates[f]);
       }
     });
 
-    if (fields.length === 0) return res.status(400).json({ message: 'No valid fields' });
-
-    values.push(userId);
-    await db.run(`UPDATE users SET ${fields.join(', ')} WHERE id = $${values.length}`, values);
-
-    res.json({ success: true, message: 'Settings updated successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to update settings' });
-  }
-});
-
-// 6. Get user activity log
-router.get('/me/activity', authenticate, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { limit = 20, offset = 0 } = req.query;
-
-    // FIX: Quoted table name "userActivity" and "createdAt"
-    const activities = await db.all(
-      `SELECT * FROM "userActivity" 
-       WHERE "userId" = $1
-       ORDER BY "createdAt" DESC
-       LIMIT $2 OFFSET $3`,
-      [userId, parseInt(limit), parseInt(offset)]
-    );
-
-    const countData = await db.get('SELECT COUNT(*) as total FROM "userActivity" WHERE "userId" = $1', [userId]);
-
-    res.json({
-      success: true,
-      activities,
-      pagination: {
-        total: parseInt(countData.total || 0),
-        limit: parseInt(limit),
-        offset: parseInt(offset)
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to retrieve activity log' });
-  }
-});
-// --- CONTINUATION OF backend/routes/users.js ---
-
-// 7. Change password
-router.put('/me/password', authenticate, [
-  body('currentPassword').notEmpty(),
-  body('newPassword').isLength({ min: 8 })
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
-
-    const userId = req.user.id;
-    const { currentPassword, newPassword } = req.body;
-
-    const user = await db.get('SELECT password FROM users WHERE id = $1', [userId]);
-
-    const bcrypt = require('bcryptjs');
-    const isValid = await bcrypt.compare(currentPassword, user.password);
-
-    if (!isValid) return res.status(400).json({ success: false, message: 'Current password incorrect' });
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await db.run('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+    values.push(req.user.id);
+    await db.run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
 
     await sendEmail({
       to: req.user.email,
-      subject: 'Password Changed',
-      template: 'passwordChanged',
-      data: { name: req.user.firstName, changedAt: new Date().toISOString() }
+      subject: 'Account Preferences Updated',
+      template: 'welcome',
+      data: { firstName: req.user.firstName, message: 'Your account settings and notification preferences have been updated.' }
     });
 
-    res.json({ success: true, message: 'Password changed successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to change password' });
-  }
+    res.json({ success: true, message: 'Settings saved' });
+  } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 8. Enable/Disable 2FA
-router.put('/me/2fa', authenticate, [
-  body('enabled').isBoolean()
-], async (req, res) => {
+// ---------------------------------------------------------
+// 6. GET ACTIVITY LOG
+// ---------------------------------------------------------
+router.get('/me/activity', authenticate, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { enabled, method = 'email' } = req.body;
-
-    // FIX: Quoted columns and boolean value
-    await db.run(
-      'UPDATE users SET "twoFactorEnabled" = $1, "twoFactorMethod" = $2 WHERE id = $3',
-      [enabled, method, userId]
-    );
-
-    res.json({ success: true, message: `2FA ${enabled ? 'enabled' : 'disabled'}`, twoFactorEnabled: enabled });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to update 2FA' });
-  }
+    const activities = await db.all(`SELECT * FROM "userActivity" WHERE "userId" = ? ORDER BY "createdAt" DESC LIMIT 20`, [req.user.id]);
+    res.json({ success: true, activities });
+  } catch (error) { res.status(500).json({ success: false }); }
 });
 
-//  Get KYC status
+// ---------------------------------------------------------
+// 7. REQUEST PASSWORD CHANGE OTP (NEW)
+// ---------------------------------------------------------
+router.post('/me/password/otp', authenticate, async (req, res) => {
+  try {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60000);
+
+    await db.run('DELETE FROM "verificationCodes" WHERE email = ? AND type = ?', [req.user.email, 'password_change']);
+    await db.run('INSERT INTO "verificationCodes" (id, email, code, type, "expiresAt") VALUES (?, ?, ?, ?, ?)', [uuidv4(), req.user.email, otp, 'password_change', expiresAt]);
+
+    await sendEmail({
+      to: req.user.email,
+      subject: `Security Code: ${otp}`,
+      template: 'welcome',
+      data: { firstName: req.user.firstName, message: `Your code to change your password is ${otp}. It expires in 10 minutes.` }
+    });
+
+    res.json({ success: true, message: 'OTP sent' });
+  } catch (e) { res.status(500).json({ success: false }); }
+});
+
+// ---------------------------------------------------------
+// 8. CHANGE PASSWORD WITH OTP (+ Email Notification)
+// ---------------------------------------------------------
+router.put('/me/password', authenticate, async (req, res) => {
+  try {
+    const { currentPassword, newPassword, code } = req.body;
+
+    const validCode = await db.get('SELECT * FROM "verificationCodes" WHERE email = ? AND code = ? AND type = ?', [req.user.email, code, 'password_change']);
+    if (!validCode || new Date() > new Date(validCode.expiresAt)) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+
+    const user = await db.get('SELECT password FROM users WHERE id = ?', [req.user.id]);
+    if (!(await bcrypt.compare(currentPassword, user.password))) return res.status(400).json({ success: false, message: 'Current password incorrect' });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await db.run('UPDATE users SET password = ? WHERE id = ?', [hashed, req.user.id]);
+    await db.run('DELETE FROM "verificationCodes" WHERE email = ?', [req.user.email]);
+
+    await sendEmail({
+      to: req.user.email,
+      subject: 'Security Alert: Password Changed Successfully',
+      template: 'welcome',
+      data: { firstName: req.user.firstName, message: 'Your BIFRC password was changed. If you did not do this, freeze your account immediately.' }
+    });
+
+    res.json({ success: true, message: 'Password updated' });
+  } catch (error) { res.status(500).json({ success: false }); }
+});
+
+// ---------------------------------------------------------
+// 9. UPDATE 2FA SETTINGS (+ Email Notification)
+// ---------------------------------------------------------
+router.put('/me/2fa', authenticate, async (req, res) => {
+  try {
+    const { enabled, method } = req.body;
+    await db.run('UPDATE users SET "twoFactorEnabled" = ?, "twoFactorMethod" = ? WHERE id = ?', [enabled, method, req.user.id]);
+    
+    await sendEmail({
+      to: req.user.email,
+      subject: '2FA Status Changed',
+      template: 'welcome',
+      data: { firstName: req.user.firstName, message: `Two-Factor Authentication has been ${enabled ? 'ENABLED' : 'DISABLED'} on your account.` }
+    });
+
+    res.json({ success: true, message: '2FA updated' });
+  } catch (e) { res.status(500).json({ success: false }); }
+});
+
+// ---------------------------------------------------------
+// 10. GET KYC HISTORY
+// ---------------------------------------------------------
+router.get('/me/kyc', authenticate, async (req, res) => {
+  try {
+    const kyc = await db.get('SELECT "kycStatus", "kycVerifiedAt", "kycRejectedReason" FROM users WHERE id = ?', [req.user.id]);
+    const submissions = await db.all('SELECT * FROM "kycSubmissions" WHERE "userId" = ? ORDER BY "submittedAt" DESC', [req.user.id]);
+    res.json({ success: true, kycStatus: kyc.kycStatus, verifiedAt: kyc.kycVerifiedAt, submissions });
+  } catch (error) { res.status(500).json({ success: false }); }
+});
+
+// ---------------------------------------------------------
+// 11. SUBMIT KYC (The Synchronized Version)
+// ---------------------------------------------------------
 router.post('/me/kyc', authenticate, async (req, res) => {
   try {
     const { fullName, docType, docNumber, address, idFront, idBack, selfieImage } = req.body;
-    const userId = req.user.id;
+    await db.run(`INSERT INTO "kycSubmissions" (id, "userId", "fullName", "documentType", "documentNumber", "idFront", "idBack", "selfieImage", status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`, 
+      [uuidv4(), req.user.id, fullName, docType, docNumber, idFront, idBack, selfieImage]);
 
-    console.log("📥 [KYC] Processing for:", fullName);
+    await db.run('UPDATE users SET "kycStatus" = ?, status = ?, address = ? WHERE id = ?', 
+      ['pending_review', 'pending_review', address, req.user.id]);
 
-    // FIX: Using "db" (not dbAsync) and correct column count
-    const query = `
-      INSERT INTO "kycSubmissions" 
-      (id, "userId", "fullName", "documentType", "documentNumber", "idFront", "idBack", "selfieImage", status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-    `;
+    await sendEmail({
+        to: req.user.email,
+        subject: 'Identity Verification Under Review',
+        template: 'welcome',
+        data: { firstName: req.user.firstName, message: 'Your documents have been received and are now under manual review by our compliance team.' }
+    });
 
-    const params = [
-      uuidv4(), 
-      userId, 
-      fullName, 
-      docType || 'passport', 
-      docNumber, 
-      idFront, 
-      idBack, 
-      selfieImage
-    ];
-
-    await db.run(query, params);
-
-    // Update main user record
-    await db.run(
-      'UPDATE users SET "kycStatus" = ?, status = ?, address = ? WHERE id = ?', 
-      ['pending_review', 'pending_review', address, userId]
-    );
-
-    res.json({ success: true, message: 'KYC Submitted Successfully' });
-
-  } catch (error) {
-    console.error('❌ KYC ROUTE ERROR:', error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
+    res.json({ success: true, message: 'Submitted' });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
-// 11. Admin: Get all users
+
+// ---------------------------------------------------------
+// 12. ADMIN: GET ALL USERS
+// ---------------------------------------------------------
 router.get('/', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const { search, kycStatus, role, limit = 20, offset = 0 } = req.query;
-
-    let sql = `SELECT id, email, "firstName", "lastName", phone, "kycStatus", role, status, "createdAt", "lastLoginAt" FROM users WHERE 1=1`;
-    let params = [];
-
-    if (search) {
-      sql += ` AND (email ILIKE $${params.length + 1} OR "firstName" ILIKE $${params.length + 2} OR "lastName" ILIKE $${params.length + 3})`;
-      const term = `%${search}%`;
-      params.push(term, term, term);
-    }
-
-    if (kycStatus) {
-      sql += ` AND "kycStatus" = $${params.length + 1}`;
-      params.push(kycStatus);
-    }
-
-    sql += ` ORDER BY "createdAt" DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(parseInt(limit), parseInt(offset));
-
-    const users = await db.all(sql, params);
-    const countData = await db.get('SELECT COUNT(*) as total FROM users');
-
-    res.json({ success: true, users, pagination: { total: parseInt(countData.total), limit, offset } });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to retrieve users' });
-  }
+    const users = await db.all('SELECT id, email, "firstName", "lastName", status, "kycStatus", role FROM users ORDER BY "createdAt" DESC');
+    res.json({ success: true, users });
+  } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 12. Admin: Get single user
+// ---------------------------------------------------------
+// 13. ADMIN: GET SINGLE USER
+// ---------------------------------------------------------
 router.get('/:id', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const user = await db.get(`SELECT * FROM users WHERE id = $1`, [id]);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-
-    const accounts = await db.all('SELECT * FROM accounts WHERE "userId" = $1', [id]);
-    const transactions = await db.all(`
-      SELECT t.*, a."accountNumber" 
-      FROM transactions t
-      JOIN accounts a ON t."accountId" = a.id
-      WHERE a."userId" = $1
-      ORDER BY t.date DESC LIMIT 10`, [id]);
-
-    res.json({ success: true, user, accounts, recentTransactions: transactions });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to retrieve user' });
-  }
+    const user = await db.get(`SELECT * FROM users WHERE id = ?`, [req.params.id]);
+    res.json({ success: true, user });
+  } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// 13. Admin: Update user
+// ---------------------------------------------------------
+// 14. ADMIN: UPDATE USER (+ Email Notification)
+// ---------------------------------------------------------
 router.put('/:id', authenticate, authorizeAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const updates = req.body;
-    const allowedFields = ['firstName', 'lastName', 'phone', 'kycStatus', 'role', 'status'];
-
-    const fields = [];
-    const values = [];
-    allowedFields.forEach(field => {
-      if (updates[field] !== undefined) {
-        fields.push(`"${field}" = $${values.length + 1}`);
-        values.push(updates[field]);
-      }
+    const { status, role } = req.body;
+    await db.run('UPDATE users SET status = ?, role = ? WHERE id = ?', [status, role, req.params.id]);
+    
+    const user = await db.get('SELECT email, "firstName" FROM users WHERE id = ?', [req.params.id]);
+    await sendEmail({
+      to: user.email,
+      subject: 'Official Account Status Update',
+      template: 'welcome',
+      data: { firstName: user.firstName, message: `Your BIFRC account status has been changed to: ${status.toUpperCase()}.` }
     });
 
-    if (fields.length === 0) return res.status(400).json({ message: 'No valid fields' });
-
-    values.push(id);
-    await db.run(`UPDATE users SET ${fields.join(', ')} WHERE id = $${values.length}`, values);
-
-    res.json({ success: true, message: 'User updated successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Update failed' });
-  }
+    res.json({ success: true, message: 'User updated' });
+  } catch (error) { res.status(500).json({ success: false }); }
 });
-// kyc verification for user
-router.post('/me/kyc', authenticate, async (req, res) => {
-  try {
-    const { fullName, docType, docNumber, address, idFront, idBack, selfieImage } = req.body;
-    const userId = req.user.id;
 
-    console.log("📥 [KYC] Received data for:", fullName);
-
-    // FIX: We use plain column names. 
-    // The dbAsync.prepareSql helper in your db.js will add the quotes automatically.
-    // Order: id, userId, fullName, documentType, documentNumber, idFront, idBack, selfieImage, status (9 columns)
-    const query = `
-      INSERT INTO "kycSubmissions" 
-      (id, userId, fullName, documentType, documentNumber, idFront, idBack, selfieImage, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-    `;
-
-    const params = [
-      uuidv4(), 
-      userId, 
-      fullName, 
-      docType || 'passport', 
-      docNumber, 
-      idFront, 
-      idBack, 
-      selfieImage
-    ];
-
-    // 1. Save to the KYC table
-    await dbAsync.run(query, params);
-
-    // 2. Update the main users table status
-    // This is the line that stops the refresh loop
-    await dbAsync.run(
-      'UPDATE users SET kycStatus = ?, status = ?, address = ? WHERE id = ?', 
-      ['pending_review', 'pending_review', address, userId]
-    );
-
-    console.log("✅ [KYC] Database updated successfully");
-
-    res.json({ 
-      success: true, 
-      message: 'KYC documents submitted successfully' 
-    });
-
-  } catch (error) {
-    console.error('❌ KYC ROUTE ERROR:', error.message);
-    res.status(500).json({ 
-      success: false, 
-      message: "Database Error: " + error.message 
-    });
-  }
-});
 module.exports = router;

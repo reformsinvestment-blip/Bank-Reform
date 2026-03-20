@@ -158,6 +158,13 @@ export default function Transfers() {
       />
     </div>
   )
+  if (loading || !accounts) {
+  return (
+    <div className="flex items-center justify-center min-h-[400px]">
+      <div className="w-8 h-8 border-2 border-t-gold border-noir-400 rounded-full animate-spin" />
+    </div>
+  );
+};
 
   return (
     <div className="space-y-6">
@@ -200,7 +207,7 @@ export default function Transfers() {
             >
               {accounts.map(a => (
                 <option key={a.id} value={a.id}>
-                  {a.accountType} — {a.accountNumber} (${a.balance?.toFixed(2)})
+                  {a.accountType} — {a.accountNumber} (${Number(a.balance || 0).toFixed(2)})
                 </option>
               ))}
             </select>

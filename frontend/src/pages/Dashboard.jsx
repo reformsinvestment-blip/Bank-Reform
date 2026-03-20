@@ -27,13 +27,13 @@ export default function Dashboard() {
       transactionsAPI.getAll({ limit: 8 }),
       transactionsAPI.getMonthly(6)
     ]).then(([a, t, m]) => {
-      setAccounts(a.data.data.accounts)
-      setTransactions(t.data.data.transactions)
-      setMonthlyData(m.data.data.monthly.reverse())
-    }).catch(() => {}).finally(() => setLoading(false))
+      setAccounts(a.data.data?.accounts || [])
+      setTransactions(t.data.data?.transactions || [])
+      setMonthlyData((m.data.data?.monthly || []).reverse())
+    }).catch(() => { }).finally(() => setLoading(false))
   }, [])
 
-const totalBalance = accounts.reduce((acc, curr) => acc + (Number(curr.balance) || 0), 0)
+  const totalBalance = accounts.reduce((acc, curr) => acc + (Number(curr.balance) || 0), 0)
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">

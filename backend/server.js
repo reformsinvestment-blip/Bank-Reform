@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -6,9 +5,13 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
 const path = require('path');
+const hpp = require('hpp'); // Added for security
 
 // Load environment variables
 dotenv.config();
+
+// Import database
+const { initDatabase } = require('./database/db');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -16,7 +19,6 @@ const userRoutes = require('./routes/users');
 const accountRoutes = require('./routes/accounts');
 const transactionRoutes = require('./routes/transactions');
 const transferRoutes = require('./routes/transfers');
-//const depositRoutes = require('./routes/deposits'); // <-- add this
 const loanRoutes = require('./routes/loans');
 const cardRoutes = require('./routes/cards');
 const depositRoutes = require('./routes/deposits');
@@ -27,100 +29,81 @@ const adminRoutes = require('./routes/admin');
 const supportRoutes = require('./routes/support');
 const notificationRoutes = require('./routes/notifications');
 
-// Import database
-const { initDatabase } = require('./database/db');
-
 // Initialize Express app
 const app = express();
-app.use((req, res, next) => {
-  console.log(`🚀 [${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
-  next();
-});
 const PORT = process.env.PORT || 5000;
 
 // ---------------------------
-// Security middleware
+// 1. Security Middleware
 // ---------------------------
-app.use(
-  helmet({
-    contentSecurityPolicy: false,
+// Helmet protects against various header-based attacks
+app.use(helmet({
+    contentSecurityPolicy: false, // Allow inline scripts for dashboard charts
     crossOriginEmbedderPolicy: false,
-  })
-);
+}));
+
+// Prevent HTTP Parameter Pollution
+app.use(hpp());
 
 // ---------------------------
-// CORS configuration
+// 2. CORS configuration (Strict)
 // ---------------------------
 const allowedOrigins = [
-  'http://localhost:5173',           // local development
-  'https://bank-reform.vercel.app',  // production frontend
-  'https://bifrc.org',               // Your main domain
-  'https://www.bifrc.org', 
-  'https://bifrc-api.onrender.com'
+  'http://localhost:5173',           // Local dev
+  'https://bank-reform.vercel.app',  // Vercel build
+  'https://bifrc.org',               // Main domain
+  'https://www.bifrc.org'            // www version
 ];
 
-app.use(
-  cors({
+app.use(cors({
     origin: (origin, callback) => {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error(`Origin ${origin} not allowed by CORS`));
+        callback(new Error(`Security Block: Origin ${origin} not allowed by CORS`));
       }
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+}));
 
 // ---------------------------
-// General Rate Limiting
+// 3. Rate Limiting
 // ---------------------------
-const limiter = rateLimit({
+const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: 'Too many requests from this IP, please try again later.',
+  max: 500, // More generous for valid users
+  message: 'Too many requests from this IP, please try again in 15 minutes.',
 });
-app.use(limiter);
+app.use('/api/', globalLimiter);
 
-// ---------------------------
-// Auth Rate Limiter (login/register)
-// ---------------------------
+// Brute-force protection for Login/Register
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === 'development' ? 50 : 5,
-  message: 'Too many authentication attempts, please try again later.',
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 10 : 100, // Strict in production
+  message: 'Security Alert: Too many auth attempts. IP logged.',
 });
 
 // ---------------------------
-// Body parsing middleware
+// 4. Request Parsing
 // ---------------------------
+// Increased limits for KYC Base64 image uploads
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// ---------------------------
-// Logging middleware
-// ---------------------------
-app.use(morgan('dev'));
+// Logging
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ---------------------------
-// Static files for uploads
-// ---------------------------
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// ---------------------------
-// Initialize database
+// 5. App Initialization
 // ---------------------------
 initDatabase();
 
 // ---------------------------
-// API Routes
+// 6. API Routes
 // ---------------------------
-// Auth routes with limiter applied inside authRoutes
-app.use('/api/auth', authRoutes); // authLimiter is now handled inside auth.js for login/register
-
-// Other routes
+app.use('/api/auth', authLimiter, authRoutes); // Apply auth strict limiter
 app.use('/api/users', userRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/transactions', transactionRoutes);
@@ -128,7 +111,6 @@ app.use('/api/transfers', transferRoutes);
 app.use('/api/loans', loanRoutes);
 app.use('/api/cards', cardRoutes);
 app.use('/api/deposits', depositRoutes);
-//app.use('/api/deposits', depositRoutes); // <-- add this
 app.use('/api/bills', billRoutes);
 app.use('/api/crypto', cryptoRoutes);
 app.use('/api/statements', statementRoutes);
@@ -136,65 +118,41 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/notifications', notificationRoutes);
 
-// ---------------------------
-// Health check endpoint
-// ---------------------------
+// Static files for avatars/receipts
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Health Check
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: 'SecureBank API is running',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-  });
+  res.status(200).json({ status: 'OK', environment: process.env.NODE_ENV, timestamp: new Date() });
 });
 
 // ---------------------------
-// Root endpoint
+// 7. Error Handling
 // ---------------------------
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Welcome to SecureBank API',
-    documentation: '/api/docs',
-    health: '/api/health',
-  });
-});
-
-// ---------------------------
-// 404 handler
-// ---------------------------
+// 404 Handler
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found',
-  });
+  res.status(404).json({ success: false, message: 'Endpoint not found' });
 });
 
-// ---------------------------
-// Global error handler
-// ---------------------------
+// Global Exception Handler (Hide stack traces in production)
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error(`🚨 [SERVER ERROR]: ${err.message}`);
   res.status(err.status || 500).json({
     success: false,
-    message: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    message: process.env.NODE_ENV === 'production' 
+      ? 'Internal server error' 
+      : err.message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
-// ---------------------------
-// Start server
-// ---------------------------
+// Start Server
 app.listen(PORT, () => {
   console.log(`
-╔════════════════════════════════════════════════════════════╗
-║                                                            ║
-║           🏦 SecureBank API Server                         ║
-║                                                            ║
-║   Server running on port: ${PORT}                          ║
-║   Environment: ${process.env.NODE_ENV || 'development'}    ║
-║   API URL: http://localhost:${PORT}/api                    ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
+  🏦 BIFRC CORE API ACTIVE
+  PORT: ${PORT}
+  ENV: ${process.env.NODE_ENV || 'development'}
+  ───────────────────────────────────────
   `);
 });
 

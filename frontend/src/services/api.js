@@ -5,6 +5,7 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
+
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -25,11 +26,13 @@ api.interceptors.response.use(
 
 export const authAPI = {
   register: data => api.post('/auth/register', data),
+  registerVerify: data => api.post('/auth/register/verify', data),
   login: data => api.post('/auth/login', data),
   me: () => api.get('/auth/me'),
   updateProfile: data => api.put('/auth/profile', data),
   changePassword: data => api.put('/auth/change-password', data),
   forgotPassword: data => api.post('/auth/forgot-password', data),
+  requestPasswordOTP: () => api.post('/auth/change-password/otp'),
   logout: () => api.post('/auth/logout'),
 }
 
@@ -57,7 +60,7 @@ export const adminAPI = {
   // KYC & Approvals
   getPendingKYC: () => api.get('/admin/kyc/pending'),
   approveKYC: userId => api.post(`/admin/users/${userId}/approve-kyc`),
-  getKYCDocuments: (id) => api.get('/admin/users/${userId}/kyc-docs'),
+  getKYCDocuments: (id) => api.get(`/admin/users/${id}/kyc-docs`),
   rejectKYC: (userId, reason) => api.post(`/admin/users/${userId}/reject-kyc`, { reason }),
   
   // Deposits & Loans

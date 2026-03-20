@@ -213,6 +213,17 @@ const initDatabase = async () => {
       frequency TEXT NOT NULL, "nextPaymentDate" TIMESTAMP NOT NULL, description TEXT, status TEXT DEFAULT 'active', 
       "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
+    
+    //20. OTP Secrets
+    await pool.query(`
+  CREATE TABLE IF NOT EXISTS "verificationCodes" (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'registration' or 'password_change'
+    "expiresAt" TIMESTAMP NOT NULL
+  )
+`);
 
     // ─── AUTO-MIGRATIONS ───
     console.log('⏳ Running Onboarding & KYC Schema Migrations...');
@@ -224,6 +235,7 @@ const initDatabase = async () => {
       ALTER TABLE "kycSubmissions" ADD COLUMN IF NOT EXISTS "idFront" TEXT;
       ALTER TABLE "kycSubmissions" ADD COLUMN IF NOT EXISTS "idBack" TEXT;
       ALTER TABLE "kycSubmissions" DROP COLUMN IF EXISTS "documentImage";
+      ALTER TABLE "verificationCodes" ADD COLUMN IF NOT EXISTS type TEXT;
     `);
 
     await pool.query('CREATE INDEX IF NOT EXISTS idx_trans_user ON transactions("userId")');
@@ -237,16 +249,35 @@ const initDatabase = async () => {
   }
 };
 
+
 const seedInitialData = async () => {
   try {
-    const admin = await dbAsync.get("SELECT * FROM users WHERE email = $1", ['admin@securebank.com']);
+    // 1. Pull credentials from your .env file
+    const adminEmail = process.env.ADMIN_DEFAULT_EMAIL ;
+    const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD ;
+
+    // 2. Check if this specific admin email already exists
+    const admin = await dbAsync.get("SELECT * FROM users WHERE email = $1", [adminEmail]);
+
     if (!admin) {
-      const hashedPassword = await bcrypt.hash('admin123', 10);
+      // 3. Hash the password from the .env
+      const hashedPassword = await bcrypt.hash(adminPassword, 10);
+      
+      // 4. Insert the admin with 'active' and 'approved' status
       await dbAsync.run(`
         INSERT INTO users (id, "firstName", "lastName", email, password, role, "isVerified", status, "kycStatus")
         VALUES (?, ?, ?, ?, ?, 'admin', true, 'active', 'approved')
-      `, [uuidv4(), 'Admin', 'User', 'admin@securebank.com', hashedPassword]);
-      console.log('✅ Admin user seeded');
+      `, [
+        uuidv4(), 
+        'Admin', 
+        'User', 
+        adminEmail, 
+        hashedPassword
+      ]);
+
+      console.log(`✅ Admin user seeded from .env: ${adminEmail}`);
+    } else {
+      console.log('ℹ️ Admin user already exists in database.');
     }
   } catch (error) {
     console.error('❌ Error seeding data:', error);

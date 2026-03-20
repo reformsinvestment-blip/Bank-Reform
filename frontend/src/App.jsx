@@ -58,34 +58,45 @@ function PrivateLayout() {
   const { user, loading } = useAuth()
   const path = window.location.pathname
 
+  // 1. Show loader while checking session
   if (loading) return <SplashLoader />
+
+  // 2. If not logged in at all, go to login
   if (!user) return <Navigate to="/login" replace />
 
-  if (user.role !== 'admin') {
-    const isPending = user.status === 'pending_review' || user.kycStatus === 'pending_review';
-    
-    // 1. If Active: Block KYC pages
-    if (user.status === 'active' && (path === '/kyc' || path === '/kyc-pending')) {
-      return <Navigate to="/dashboard" replace />
-    }
+  // 3. ADMIN RULE: Admins are never restricted
+  if (user.role === 'admin') return <Layout />
 
-    // 2. If Not Active: Only allow KYC flow and basic settings
-    // ADDED '/kyc-pending' TO THE ALLOWED LIST BELOW
-    const allowed = ['/kyc', '/kyc-pending', '/profile', '/support', '/notifications'];
-    if (user.status !== 'active' && !allowed.includes(path)) {
-      // Direct them to the correct step based on status
-      return <Navigate to={isPending ? "/kyc-pending" : "/kyc"} replace />
-    }
+  // 4. USER STATUS CALCULATIONS
+  const isPending = user.status === 'pending_review' || user.kycStatus === 'pending_review';
+  const isActive = user.status === 'active';
 
-    // 3. If Pending and trying to see the form: Push to pending screen
-    if (isPending && path === '/kyc') {
-      return <Navigate to="/kyc-pending" replace />
-    }
+  // 5. IF USER IS ACTIVE: Prevent them from seeing any KYC pages
+  if (isActive && (path === '/kyc' || path === '/kyc-pending')) {
+    return <Navigate to="/dashboard" replace />
   }
 
+  // 6. IF USER IS NOT ACTIVE: Enforce "Allowed List"
+  // Users who haven't finished KYC can only see these 4 pages
+  const allowedPaths = ['/kyc', '/kyc-pending', '/profile', '/support', '/notifications'];
+  
+  if (!isActive && !allowedPaths.includes(path)) {
+    // If they try to go to Dashboard/Transfers/etc, push them back based on their specific state
+    return <Navigate to={isPending ? "/kyc-pending" : "/kyc"} replace />
+  }
+
+  // 7. SPECIFIC REDIRECT: Prevent Pending users from seeing the Form (and vice versa)
+  if (isPending && path === '/kyc') {
+    return <Navigate to="/kyc-pending" replace />
+  }
+  
+  if (!isPending && !isActive && path === '/kyc-pending') {
+    return <Navigate to="/kyc" replace />
+  }
+
+  // If everything is okay, show the sidebar and content
   return <Layout />
 }
-
 function AdminGuard({ children }) {
   const { user } = useAuth()
   if (user?.role !== 'admin') return <Navigate to="/dashboard" replace />
